@@ -47,8 +47,11 @@ export function createApp() {
   })
   app.use('/api/auth/login', authLimiter)
   app.use('/api/auth/register', authLimiter)
+  app.use('/auth/login', authLimiter)
+  app.use('/auth/register', authLimiter)
 
   app.use('/api', routes)
+  app.use('/', routes)
 
   app.use(notFoundHandler)
   app.use(errorHandler)

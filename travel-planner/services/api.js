@@ -1,4 +1,8 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api'
+let rawUrl = (import.meta.env.VITE_API_URL || 'http://localhost:4000/api').trim().replace(/\/+$/, '')
+if (!rawUrl.endsWith('/api')) {
+  rawUrl += '/api'
+}
+const API_URL = rawUrl
 const TOKEN_KEY = 'atlasai_token'
 
 export function getToken() {
