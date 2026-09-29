@@ -1,0 +1,2939 @@
+===== pages/Attractions.jsx =====
+import { useEffect, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Star, PlusCircle, CheckCircle2, MapPin, ArrowUpRight, ChevronLeft, ChevronRight, AlertTriangle, RefreshCw, Compass, ExternalLink } from 'lucide-react'
+import { TextField } from '../components/FormField'
+import { useAuth } from '../context/AuthContext'
+import { api } from '../services/api'
+
+const PAGE_SIZE = 3
+const DEFAULT_DESTINATION = 'Manali'
+
+// Local photos exist only for the bundled sample places; live places use the
+// provider's own preview image when it supplies one.
+const sampleImages = {
+  'Solang Valley': '/images/solang-valley.jpg',
+  'Hadimba Temple': '/images/hidimba-temple.jpg',
+  'Rohtang Pass': '/images/rohtang-pass.jpg',
+  'Old Manali Cafes': '/images/old-manali.webp',
+  'Jogini Waterfall Trek': '/images/jogini-waterfall.jpg',
+}
+
+const SAMPLE_NOTES = {
+  not_configured: 'Live place data is not set up on this server, so these are sample places.',
+  timeout: 'Live place data took too long to respond, so these are sample places.',
+  rate_limited: 'Live place data is temporarily limited, so these are sample places.',
+  default: 'Live place data is unavailable right now, so these are sample places.',
+}
+
+const EMPTY_NOTES = {
+  no_results: 'We could not find places for this destination. Try another spelling or a nearby city.',
+  destination_not_found: 'We could not find that destination. Try another spelling or a nearby city.',
+  not_configured: 'Live place data is not set up on this server, and we have no sample places for this destination.',
+  default: 'Place data is unavailable right now and we have no sample places for this destination.',
+}
+
+function imageFor(place) {
+  if (place.dataSource === 'sample') return sampleImages[place.name]
+  return place.images?.[0]
+}
+
+function SourceBadge({ data }) {
+  if (data.dataSource === 'live') return <span className="atlas-pill is-live" title="Fetched from OpenTripMap just now">Live data · OpenTripMap</span>
+  if (data.dataSource === 'cached') {
+    return <span className="atlas-pill is-live" title="A saved copy of an earlier OpenTripMap response">Cached data · OpenTripMap{data.stale ? ' (may be out of date)' : ''}</span>
+  }
+  return <span className="atlas-pill is-sample" title="Bundled demo places, not from a live provider">Sample data</span>
+}
+
+function LoadingGrid() {
+  return (
+    <div className="atlas-attractions-grid" role="status" aria-label="Loading places">
+      {[0, 1, 2].map((i) => (
+        <div className="atlas-attraction-skeleton" key={i}>
+          <div className="art" />
+          <div className="line" />
+          <div className="line short" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export default function Attractions() {
+  const { isAuthenticated, loading: authLoading } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initial = searchParams.get('destination')?.trim() || DEFAULT_DESTINATION
+  const [input, setInput] = useState(initial)
+  const [active, setActive] = useState(initial)
+  const [attempt, setAttempt] = useState(0) // bumped by Retry / re-submitting the same destination
+  const [result, setResult] = useState(null) // { key, data } | { key, errorKind }
+  const [added, setAdded] = useState({})
+  const [pageState, setPageState] = useState({ key: null, page: 0 })
+
+  // Loading is derived: a request is "in flight" until a result exists for the current key.
+  const requestKey = `${active}|${attempt}`
+  const current = result?.key === requestKey ? result : null
+  const status = !current ? 'loading' : current.errorKind ? 'error' : 'ready'
+  const data = current?.data || null
+  const errorKind = current?.errorKind || null
+  const page = pageState.key === requestKey ? pageState.page : 0
+  const setPage = (fn) => setPageState({ key: requestKey, page: fn(page) })
+  const retry = () => setAttempt((n) => n + 1)
+
+  useEffect(() => {
+    if (authLoading || !isAuthenticated) return undefined
+    let cancelled = false
+    api.listAttractions(active)
+      .then((res) => { if (!cancelled) setResult({ key: requestKey, data: res }) })
+      .catch((err) => { if (!cancelled) setResult({ key: requestKey, errorKind: err?.status === 401 ? 'auth' : 'generic' }) })
+    return () => { cancelled = true }
+  }, [active, requestKey, authLoading, isAuthenticated])
+
+  const submit = (e) => {
+    e.preventDefault()
+    const next = input.trim()
+    if (!next) return
+    setSearchParams({ destination: next }, { replace: true })
+    if (next === active) retry()
+    else setActive(next)
+  }
+
+  const places = data?.attractions || []
+  const totalPages = Math.max(1, Math.ceil(places.length / PAGE_SIZE))
+  const visible = places.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
+  const destinationName = data?.destination?.name || active
+
+  return (
+    <div>
+      <section>
+        <p className="atlas-eyebrow">Explore your destination</p>
+        <h1 className="atlas-page-title">Places worth the detour.</h1>
+        <p className="atlas-page-copy">Places around {destinationName}. Add the ones you like and AtlasAI can fit them into your itinerary.</p>
+      </section>
+
+      <form className="atlas-explore-search" onSubmit={submit}>
+        <TextField label="Destination" value={input} onChange={setInput} placeholder="e.g. Manali, Jaipur, Goa" />
+        <button type="submit" className="atlas-ghost-button"><Compass size={15} /> Explore</button>
+      </form>
+
+      {!authLoading && !isAuthenticated ? (
+        <div className="atlas-state-box">
+          <b>Sign in to explore places</b>
+          <p>Place search is available to signed-in travellers.</p>
+          <Link to="/login" state={{ from: '/attractions' }} className="atlas-ghost-button">Sign in</Link>
+        </div>
+      ) : status === 'loading' ? (
+        <LoadingGrid />
+      ) : status === 'error' ? (
+        <div className="atlas-state-box" role="alert">
+          <div className="atlas-error-text"><AlertTriangle size={15} /> {errorKind === 'auth' ? 'Your session has expired. Please sign in again.' : 'We could not load places right now.'}</div>
+          {errorKind === 'auth'
+            ? <Link to="/login" state={{ from: '/attractions' }} className="atlas-ghost-button">Sign in</Link>
+            : <button className="atlas-ghost-button" onClick={retry}><RefreshCw size={14} /> Try again</button>}
+        </div>
+      ) : places.length === 0 ? (
+        <div className="atlas-state-box">
+          <b>No places to show for "{active}"</b>
+          <p>{EMPTY_NOTES[data.fallbackReason] || EMPTY_NOTES.default}</p>
+          {data.fallbackReason !== 'no_results' && data.fallbackReason !== 'destination_not_found' && data.fallbackReason !== 'not_configured' && (
+            <button className="atlas-ghost-button" onClick={retry}><RefreshCw size={14} /> Try again</button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="atlas-status-row">
+            <SourceBadge data={data} />
+            {data.dataSource === 'sample' && (
+              <>
+                <span className="atlas-status-note">{SAMPLE_NOTES[data.fallbackReason] || SAMPLE_NOTES.default}</span>
+                {data.fallbackReason && data.fallbackReason !== 'not_configured' && (
+                  <button className="atlas-ghost-button" style={{ padding: '7px 12px', fontSize: 11 }} onClick={retry}><RefreshCw size={12} /> Retry live data</button>
+                )}
+              </>
+            )}
+            {(data.dataSource === 'live' || data.dataSource === 'cached') && data.attribution && <span className="atlas-status-note">{data.attribution}</span>}
+          </div>
+
+          <div className="atlas-attractions-grid">
+            {visible.map((a) => {
+              const image = imageFor(a)
+              const isSample = a.dataSource === 'sample'
+              return (
+                <article key={a.id} className="atlas-attraction">
+                  <div className="atlas-attraction-art" style={image ? { backgroundImage: `url("${image}")` } : undefined}>
+                    <span className="atlas-attraction-tag">{a.category}</span>
+                    <span className="atlas-attraction-location"><MapPin size={11} /> {a.area || destinationName}</span>
+                  </div>
+                  <div className="atlas-attraction-body">
+                    <div className="atlas-attraction-top">
+                      <div>
+                        <h3>{a.name}</h3>
+                        <p className="atlas-attraction-cost">
+                          {isSample ? (a.estimatedCost === 0 ? 'Free entry' : `Approx. ₹${a.estimatedCost}`) : 'Price and hours not listed'}
+                        </p>
+                      </div>
+                      {a.rating ? <span className="atlas-rating" title="OpenTripMap popularity score (1–3), not a star rating"><Star size={12} fill="currentColor" />{a.rating}/3</span> : null}
+                    </div>
+                    {!isSample && a.description && <p className="atlas-attraction-desc">{a.description}</p>}
+                    {(a.wikipediaUrl || a.website) && (
+                      <div className="atlas-attraction-links">
+                        {a.wikipediaUrl && <a href={a.wikipediaUrl} target="_blank" rel="noopener noreferrer">Wikipedia <ExternalLink size={10} /></a>}
+                        {a.website && <a href={a.website} target="_blank" rel="noopener noreferrer">Website <ExternalLink size={10} /></a>}
+                      </div>
+                    )}
+                    <button className="atlas-add" onClick={() => setAdded((s) => ({ ...s, [a.id]: true }))}>{added[a.id] ? <><CheckCircle2 size={15} /> Added to itinerary</> : <><PlusCircle size={15} /> Add to itinerary <ArrowUpRight size={14} /></>}</button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+
+          <div className="atlas-attraction-pager"><button className="atlas-arrow" disabled={page === 0} onClick={() => setPage((p) => p - 1)} aria-label="Previous attractions"><ChevronLeft size={17} /></button><span className="atlas-page-number">{page + 1} / {totalPages}</span><button className="atlas-arrow" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)} aria-label="Next attractions"><ChevronRight size={17} /></button></div>
+        </>
+      )}
+    </div>
+  )
+}
+
+===== pages/Reservations.jsx =====
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Plane, Train, Bus, Hotel, Car, CheckCircle2, ArrowUpRight, SlidersHorizontal, AlertTriangle, Search } from 'lucide-react'
+import { flights, trains, buses, hotels, rentals } from '../data/mockData'
+import { useBookings } from '../context/BookingContext'
+import { useAuth } from '../context/AuthContext'
+import { api, ApiError } from '../services/api'
+
+const tabs = [
+  { key: 'Flight', label: 'Flights', icon: Plane, data: flights },
+  { key: 'Train', label: 'Trains', icon: Train, data: trains },
+  { key: 'Bus', label: 'Buses', icon: Bus, data: buses },
+  { key: 'Hotel', label: 'Hotels', icon: Hotel, data: hotels },
+  { key: 'Rental', label: 'Rentals', icon: Car, data: rentals },
+]
+
+const SOURCE_LABEL = { live: 'Live', cached: 'Cached', sample: 'Sample data' }
+
+// Maps a normalized backend flight (see flightNormalizer.js) into the
+// {id, provider, route, time, price, status} shape the rest of this page
+// and BookingContext already use for every other travel category.
+function toFlightListItem(f) {
+  return {
+    id: f.id,
+    provider: f.airline || f.provider,
+    route: `${f.from || '—'} → ${f.to || '—'}`,
+    time: f.departure && f.arrival ? `${f.departure} → ${f.arrival}` : (f.flightNumber || 'schedule not listed'),
+    price: f.price ?? 0,
+    status: f.dataSource === 'sample' ? 'Sample' : 'Available',
+    dataSource: f.dataSource,
+    priceKnown: f.price != null,
+  }
+}
+
+// Maps a normalized backend train (see trainNormalizer.js) into the same
+// list-row shape. RailRadar's search never returns a fare, so price is
+// "on request" for live trains; status only reflects what the provider
+// actually reported (never inferred from the scheduled time).
+function toTrainListItem(t) {
+  const name = [t.trainNumber, t.trainName].filter(Boolean).join(' ') || t.provider
+  const delay = t.delayMinutes ? ` · ${t.delayMinutes} min late` : ''
+  return {
+    id: t.id,
+    provider: name,
+    route: `${t.from || '—'} → ${t.to || '—'}`,
+    time: t.departure && t.arrival ? `${t.departure} → ${t.arrival}${t.stops != null ? ` · ${t.stops} halts` : ''}` : 'schedule not listed',
+    price: t.price ?? 0,
+    status: t.dataSource === 'sample' ? 'Sample' : `${t.status ? t.status.charAt(0).toUpperCase() + t.status.slice(1) : 'Scheduled'}${delay}`,
+    dataSource: t.dataSource,
+    priceKnown: t.price != null,
+  }
+}
+
+function defaultDepartureDate() {
+  const d = new Date()
+  d.setDate(d.getDate() + 30)
+  return d.toISOString().slice(0, 10)
+}
+
+// Maps a normalized backend hotel (see hotelNormalizer.js) into the
+// {id, provider, route, time, price, status} shape the rest of this page
+// and BookingContext already use for every other travel category.
+function toListItem(h) {
+  return {
+    id: h.id,
+    provider: h.name,
+    route: h.area || '—',
+    time: h.pricePerNight != null ? `${h.rating ? `${h.rating}★ · ` : ''}per night` : 'price not listed',
+    price: h.pricePerNight ?? 0,
+    status: h.dataSource === 'sample' ? 'Sample' : 'Available',
+    dataSource: h.dataSource,
+    priceKnown: h.pricePerNight != null,
+  }
+}
+
+export default function Reservations() {
+  const navigate = useNavigate()
+  const { isAuthenticated } = useAuth()
+  const [active, setActive] = useState('Flight')
+  const [selected, setSelected] = useState({})
+  const [error, setError] = useState(null)
+  const { addBooking } = useBookings()
+  const current = tabs.find((t) => t.key === active)
+
+  const [hotelQuery, setHotelQuery] = useState('Manali')
+  const [hotelDraft, setHotelDraft] = useState('Manali')
+  const [hotelItems, setHotelItems] = useState(hotels)
+  const [hotelStatus, setHotelStatus] = useState('idle') // idle | loading | error
+  const [hotelMeta, setHotelMeta] = useState(null)
+
+  const [flightQuery, setFlightQuery] = useState({ destination: 'Manali', departureDate: defaultDepartureDate() })
+  const [flightDraft, setFlightDraft] = useState({ destination: 'Manali', departureDate: defaultDepartureDate() })
+  const [flightItems, setFlightItems] = useState(flights)
+  const [flightStatus, setFlightStatus] = useState('idle') // idle | loading | error
+  const [flightMeta, setFlightMeta] = useState(null)
+
+  const [trainQuery, setTrainQuery] = useState({ destination: 'Jaipur', date: defaultDepartureDate() })
+  const [trainDraft, setTrainDraft] = useState({ destination: 'Jaipur', date: defaultDepartureDate() })
+  const [trainItems, setTrainItems] = useState(trains)
+  const [trainStatus, setTrainStatus] = useState('idle') // idle | loading | error
+  const [trainMeta, setTrainMeta] = useState(null)
+
+  useEffect(() => {
+    if (active !== 'Train') return
+    let cancelled = false
+    setTrainStatus('loading')
+    api.searchTrains(trainQuery.destination, { date: trainQuery.date, limit: 10 })
+      .then((res) => {
+        if (cancelled) return
+        setTrainItems(res.trains.map(toTrainListItem))
+        setTrainMeta({ dataSource: res.dataSource, fallbackReason: res.fallbackReason, stale: res.stale })
+        setTrainStatus('idle')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setTrainItems(trains)
+        setTrainMeta(null)
+        setTrainStatus('error')
+      })
+    return () => { cancelled = true }
+  }, [active, trainQuery])
+
+  const handleTrainSearch = (e) => {
+    e.preventDefault()
+    setTrainQuery({
+      destination: trainDraft.destination.trim() || 'Jaipur',
+      date: trainDraft.date || defaultDepartureDate(),
+    })
+  }
+
+  useEffect(() => {
+    if (active !== 'Flight') return
+    let cancelled = false
+    setFlightStatus('loading')
+    api.searchFlights(flightQuery.destination, { departureDate: flightQuery.departureDate, limit: 10 })
+      .then((res) => {
+        if (cancelled) return
+        setFlightItems(res.flights.map(toFlightListItem))
+        setFlightMeta({ dataSource: res.dataSource, fallbackReason: res.fallbackReason, stale: res.stale })
+        setFlightStatus('idle')
+      })
+      .catch((err) => {
+        if (cancelled) return
+        // Backend already falls back to sample data on provider/validation
+        // failure, so reaching here means the request itself failed
+        // (network/auth) — fall back to the bundled mock catalog rather
+        // than an empty page.
+        setFlightItems(flights)
+        setFlightMeta(null)
+        setFlightStatus(err instanceof ApiError ? 'error' : 'error')
+      })
+    return () => { cancelled = true }
+  }, [active, flightQuery])
+
+  const handleFlightSearch = (e) => {
+    e.preventDefault()
+    setFlightQuery({
+      destination: flightDraft.destination.trim() || 'Manali',
+      departureDate: flightDraft.departureDate || defaultDepartureDate(),
+    })
+  }
+
+  useEffect(() => {
+    if (active !== 'Hotel') return
+    let cancelled = false
+    setHotelStatus('loading')
+    api.searchHotels(hotelQuery, { limit: 10 })
+      .then((res) => {
+        if (cancelled) return
+        setHotelItems(res.hotels.map(toListItem))
+        setHotelMeta({ dataSource: res.dataSource, fallbackReason: res.fallbackReason, stale: res.stale })
+        setHotelStatus('idle')
+      })
+      .catch((err) => {
+        if (cancelled) return
+        // Backend already falls back to sample data on provider failure, so
+        // reaching here means the request itself failed (network/auth) —
+        // fall back to the bundled mock catalog rather than an empty page.
+        setHotelItems(hotels)
+        setHotelMeta(null)
+        setHotelStatus(err instanceof ApiError ? 'error' : 'error')
+      })
+    return () => { cancelled = true }
+  }, [active, hotelQuery])
+
+  const handleHotelSearch = (e) => {
+    e.preventDefault()
+    setHotelQuery(hotelDraft.trim() || 'Manali')
+  }
+
+  const handleSelect = async (item) => {
+    if (!isAuthenticated) { navigate('/login', { state: { from: '/reservations' } }); return }
+    setError(null)
+    try {
+      await addBooking(item, active)
+      setSelected((s) => ({ ...s, [item.id]: true }))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  const listData = active === 'Hotel' ? hotelItems : active === 'Flight' ? flightItems : active === 'Train' ? trainItems : current.data
+
+  return (
+    <div>
+      <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="atlas-eyebrow">Travel marketplace</p><h1 className="atlas-page-title">Find the right way there.</h1><p className="atlas-page-copy">Compare transport and stays, then save the best match to your trip.</p></div><button className="atlas-ghost-button"><SlidersHorizontal size={14} /> Filters</button></section>
+      {error && <div className="atlas-error-text"><AlertTriangle size={14} /> {error}</div>}
+      <div className="atlas-tabs">{tabs.map(({ key, label, icon: Icon }) => <button key={key} onClick={() => setActive(key)} className={`atlas-tab ${active === key ? 'active' : ''}`}><Icon size={14} />{label}</button>)}</div>
+      {active === 'Hotel' && (
+        <form onSubmit={handleHotelSearch} className="flex items-center gap-2">
+          <input value={hotelDraft} onChange={(e) => setHotelDraft(e.target.value)} placeholder="Destination (e.g. Manali, Goa, Jaipur)" style={{ flex: 1, minWidth: 0, border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 11, background: 'var(--surface)', color: 'var(--text)' }} />
+          <button type="submit" className="atlas-ghost-button"><Search size={14} /> Search</button>
+          {hotelMeta?.dataSource && <span className="badge-success">{SOURCE_LABEL[hotelMeta.dataSource] || hotelMeta.dataSource}{hotelMeta.stale ? ' (last known)' : ''}</span>}
+        </form>
+      )}
+      {active === 'Hotel' && hotelStatus === 'loading' && <p className="atlas-page-copy">Searching accommodations…</p>}
+      {active === 'Hotel' && hotelStatus === 'error' && <div className="atlas-error-text"><AlertTriangle size={14} /> Hotel provider temporarily unavailable — showing sample listings.</div>}
+      {active === 'Hotel' && hotelStatus === 'idle' && hotelItems.length === 0 && <p className="atlas-page-copy">No hotels found for this destination.</p>}
+      {active === 'Train' && (
+        <form onSubmit={handleTrainSearch} className="flex items-center gap-2">
+          <input value={trainDraft.destination} onChange={(e) => setTrainDraft((d) => ({ ...d, destination: e.target.value }))} placeholder="Destination (e.g. Jaipur, Goa)" style={{ flex: 1, minWidth: 0, border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 11, background: 'var(--surface)', color: 'var(--text)' }} />
+          <input type="date" value={trainDraft.date} onChange={(e) => setTrainDraft((d) => ({ ...d, date: e.target.value }))} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 11, background: 'var(--surface)', color: 'var(--text)' }} />
+          <button type="submit" className="atlas-ghost-button"><Search size={14} /> Search</button>
+          {trainMeta?.dataSource && <span className="badge-success">{SOURCE_LABEL[trainMeta.dataSource] || trainMeta.dataSource}{trainMeta.stale ? ' (last known)' : ''}</span>}
+        </form>
+      )}
+      {active === 'Train' && trainStatus === 'loading' && <p className="atlas-page-copy">Searching trains…</p>}
+      {active === 'Train' && trainStatus === 'error' && <div className="atlas-error-text"><AlertTriangle size={14} /> Train provider temporarily unavailable — showing sample listings.</div>}
+      {active === 'Train' && trainStatus === 'idle' && trainMeta?.dataSource === 'cached' && <p className="atlas-page-copy">Showing cached train data.</p>}
+      {active === 'Train' && trainStatus === 'idle' && trainItems.length === 0 && <p className="atlas-page-copy">No trains found.</p>}
+      {active === 'Flight' && (
+        <form onSubmit={handleFlightSearch} className="flex items-center gap-2">
+          <input value={flightDraft.destination} onChange={(e) => setFlightDraft((d) => ({ ...d, destination: e.target.value }))} placeholder="Destination (e.g. Manali, Goa, Jaipur)" style={{ flex: 1, minWidth: 0, border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 11, background: 'var(--surface)', color: 'var(--text)' }} />
+          <input type="date" value={flightDraft.departureDate} onChange={(e) => setFlightDraft((d) => ({ ...d, departureDate: e.target.value }))} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 11, background: 'var(--surface)', color: 'var(--text)' }} />
+          <button type="submit" className="atlas-ghost-button"><Search size={14} /> Search</button>
+          {flightMeta?.dataSource && <span className="badge-success">{SOURCE_LABEL[flightMeta.dataSource] || flightMeta.dataSource}{flightMeta.stale ? ' (last known)' : ''}</span>}
+        </form>
+      )}
+      {active === 'Flight' && flightStatus === 'loading' && <p className="atlas-page-copy">Searching flights…</p>}
+      {active === 'Flight' && flightStatus === 'error' && <div className="atlas-error-text"><AlertTriangle size={14} /> Flight provider temporarily unavailable — showing sample listings.</div>}
+      {active === 'Flight' && flightStatus === 'idle' && flightMeta?.fallbackReason === 'no_results' && <p className="atlas-page-copy">No flights found for these criteria.</p>}
+      {active === 'Flight' && flightStatus === 'idle' && flightItems.length === 0 && <p className="atlas-page-copy">No flights found for this destination.</p>}
+      <div className="atlas-list-surface">{listData.map((item) => { const Icon = current.icon; return <div key={item.id} className="atlas-list-row"><span className="atlas-list-icon"><Icon size={17} /></span><div className="atlas-list-main"><b>{item.provider}</b><small>{item.route} · {item.time}</small></div><span className="badge-success">{item.status}</span><div className="atlas-list-end"><span className="atlas-price">{item.priceKnown === false ? 'Price on request' : `₹${item.price.toLocaleString()}`}</span><button onClick={() => handleSelect(item)} className={selected[item.id] ? 'badge-success' : 'btn-primary'}>{selected[item.id] ? <><CheckCircle2 size={13} /> Selected</> : <>Select <ArrowUpRight size={13} /></>}</button></div></div> })}</div>
+    </div>
+  )
+}
+
+===== pages/Dashboard.jsx =====
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { ArrowRight, Check, Compass, MapPin, Sparkles, Users, Wallet } from 'lucide-react'
+import { api } from '../services/api'
+import { useAuth } from '../context/AuthContext'
+
+export default function Dashboard() {
+  const { isAuthenticated } = useAuth()
+  const [trips, setTrips] = useState([])
+  const [loading, setLoading] = useState(isAuthenticated)
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect -- initial data load, not a synchronous setState
+  useEffect(() => {
+    if (!isAuthenticated) { setLoading(false); return }
+    let cancelled = false
+    api.listTrips()
+      .then(({ trips }) => { if (!cancelled) setTrips(trips) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [isAuthenticated])
+
+  const current = trips[0]
+  const plan = current?.finalPlan
+  const activityCount = plan?.days?.reduce((sum, d) => sum + (d.stops?.length || 0), 0)
+  const travellerCount = plan?.travellers
+  const estimatedCost = plan?.budget?.total ?? current?.budget
+
+  return (
+    <div>
+      <section className="atlas-hero">
+        <div className="atlas-hero-copy">
+          <p className="atlas-eyebrow">Your travel copilot</p>
+          <h1 className="atlas-hero-title">Plan less.<br /><span className="atlas-gradient-text">Travel</span> more.</h1>
+          <p>AtlasAI turns your ideas into personalized travel plans — with the best routes, stays, activities and budgets, powered by AI.</p>
+          <div className="atlas-hero-actions">
+            <Link to="/plan" className="btn-primary"><Sparkles size={15} /> Plan a trip <ArrowRight size={15} /></Link>
+            <Link to="/attractions" className="atlas-ghost-button">Explore places</Link>
+          </div>
+          <div className="atlas-hero-checks">
+            {['AI-powered', 'Tailored to you', 'Free to start'].map((x) => <span key={x}><i><Check size={11} /></i>{x}</span>)}
+          </div>
+        </div>
+
+        <div className="atlas-visual" aria-hidden="true">
+          <div className="atlas-destination atlas-destination-main" style={{ backgroundImage: "url('/images/manali.jpeg')" }}><div className="atlas-destination-label"><strong>Manali</strong><small>Himachal Pradesh</small></div></div>
+          <div className="atlas-destination atlas-destination-small" style={{ backgroundImage: "url('/images/andaman.jpg')" }}><div className="atlas-destination-label"><strong>Andaman</strong><small>India</small></div></div>
+          <div className="atlas-destination atlas-destination-bottom" style={{ backgroundImage: "url('/images/jaipur.jpg')" }}><div className="atlas-destination-label"><strong>Jaipur</strong><small>Rajasthan</small></div></div>
+          <div className="atlas-ai-widget">
+            <h4>✦ AI Itinerary</h4>
+            <ul>{['Transport optimized', 'Best stay options', 'Top activities', 'Within your budget'].map((x) => <li key={x}><span>✓</span>{x}</li>)}</ul>
+          </div>
+          <div className="atlas-testimonial"><b>Aarav · 2 days ago</b><p>“AtlasAI planned our Manali trip perfectly. Saved time and money.”</p></div>
+        </div>
+      </section>
+
+      <section className="atlas-metrics">
+        <div className="atlas-metric"><strong>10K+</strong><span>Happy travelers</span></div>
+        <div className="atlas-metric"><strong>50+</strong><span>Destinations</span></div>
+        <div className="atlas-metric"><strong>4.8/5</strong><span>User rating</span></div>
+        <div className="atlas-metric"><strong>100%</strong><span>Budget-aware planning</span></div>
+      </section>
+
+      <section className="atlas-home-grid">
+        {loading ? (
+          <div className="atlas-trip-banner"><div><span className="atlas-section-label">Current journey</span><h3 className="atlas-muted" style={{ fontSize: 18 }}>Loading your trips…</h3></div></div>
+        ) : current ? (
+          <>
+            <div className="atlas-trip-banner">
+              <div>
+                <span className="atlas-section-label">Current journey</span>
+                <h3>{current.destination} escape</h3>
+                <p>
+                  <MapPin size={12} style={{ display: 'inline' }} />{' '}
+                  {current.origin ? `${current.origin} → ` : ''}{current.destination}
+                  {current.startDate ? ` · ${current.startDate} → ${current.endDate}` : ''}
+                  {current.budget ? ` · ₹${current.budget.toLocaleString()} budget` : ''}
+                </p>
+              </div>
+              <Link to="/itinerary" state={{ tripId: current.id }} className="atlas-mini-link">Open itinerary <ArrowRight size={12} style={{ display: 'inline' }} /></Link>
+            </div>
+
+            <div className="atlas-activity-list">
+              <header><span className="atlas-section-label">At a glance</span></header>
+              {estimatedCost ? <div className="atlas-activity-row"><span className="atlas-activity-icon"><Wallet size={15} /></span><div><b>₹{estimatedCost.toLocaleString()} estimated</b><small>Total trip cost</small></div></div> : null}
+              <div className="atlas-activity-row"><span className="atlas-activity-icon"><Compass size={15} /></span><div><b>{activityCount ?? '—'} activities</b><small>Curated for your interests</small></div></div>
+              <div className="atlas-activity-row"><span className="atlas-activity-icon"><Users size={15} /></span><div><b>{travellerCount || 1} traveler{travellerCount === 1 || !travellerCount ? '' : 's'}</b><small>Group planning enabled</small></div></div>
+            </div>
+          </>
+        ) : (
+          <div className="atlas-trip-banner">
+            <div>
+              <span className="atlas-section-label">Current journey</span>
+              <h3>No trips yet</h3>
+              <p>Plan your first AI-powered itinerary to see it here.</p>
+            </div>
+            <Link to="/plan" className="atlas-mini-link">Plan a trip <ArrowRight size={12} style={{ display: 'inline' }} /></Link>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+===== pages/PlanTrip.jsx =====
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Sparkles, MapPin, CalendarDays, Wallet, Heart, ArrowRight, Check, AlertTriangle } from 'lucide-react'
+import { TextField, SelectField } from '../components/FormField'
+import GenerateTripLoader from '../components/GenerateTripLoader'
+import { useAuth } from '../context/AuthContext'
+
+const interests = ['Nature', 'Food', 'Adventure', 'Culture', 'Shopping', 'Nightlife']
+
+export default function PlanTrip() {
+  const navigate = useNavigate()
+  const { isAuthenticated, loading } = useAuth()
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState(null)
+  const [form, setForm] = useState({ destination: 'Manali', from: 'New Delhi', startDate: '2026-10-10', endDate: '2026-10-14', travellers: '2', budget: '35000', comfort: 'Standard', travelMode: 'Bus', interests: 'Nature, Food, Adventure' })
+  const update = (key) => (val) => setForm((f) => ({ ...f, [key]: val }))
+  const selectedInterests = form.interests.split(',').map((x) => x.trim()).filter(Boolean)
+  const toggleInterest = (interest) => {
+    const next = selectedInterests.includes(interest) ? selectedInterests.filter((x) => x !== interest) : [...selectedInterests, interest]
+    setForm((f) => ({ ...f, interests: next.join(', ') }))
+  }
+
+  const handleGenerate = (e) => {
+    e.preventDefault()
+    if (!isAuthenticated) { navigate('/login', { state: { from: '/plan' } }); return }
+    setGenError(null)
+    setGenerating(true)
+  }
+
+  const tripRequest = {
+    destination: form.destination,
+    origin: form.from,
+    startDate: form.startDate,
+    endDate: form.endDate,
+    travellers: Number(form.travellers) || 1,
+    budget: Number(form.budget) || undefined,
+    hotelPreference: form.comfort,
+    transportPreference: form.travelMode.toLowerCase(),
+    interests: selectedInterests,
+    saveAsTrip: true,
+  }
+
+  if (generating) {
+    return (
+      <div className="mx-auto max-w-2xl py-10">
+        <GenerateTripLoader
+          tripRequest={tripRequest}
+          onDone={(result) => navigate('/itinerary', { state: { finalPlan: result.state.finalPlan, tripId: result.tripId, runId: result.runId } })}
+          onError={(msg) => { setGenerating(false); setGenError(msg) }}
+        />
+      </div>
+    )
+  }
+
+  if (loading) return null
+
+  return (
+    <div>
+      <section>
+        <p className="atlas-eyebrow">Your travel copilot</p>
+        <h1 className="atlas-page-title">Tell us where.<br /><span className="atlas-gradient-text">We'll handle the rest.</span></h1>
+        <p className="atlas-page-copy">Give AtlasAI the essentials. It will compare transport, stays and activities while respecting your budget and travel style.</p>
+      </section>
+
+      {genError && (
+        <div className="atlas-surface atlas-error-text" style={{ padding: '12px 16px', marginBottom: 16 }}>
+          <AlertTriangle size={16} /><span style={{ fontSize: 12 }}>{genError}</span>
+        </div>
+      )}
+
+      <form onSubmit={handleGenerate} className="atlas-plan-layout">
+        <div className="atlas-form-surface">
+          <div className="atlas-form-section">
+            <div className="atlas-form-heading"><span className="step-icon"><MapPin size={17} /></span><div><strong>Where are you going?</strong><small>Start with your destination and departure point.</small></div></div>
+            <div className="atlas-field-grid"><TextField label="Destination" value={form.destination} onChange={update('destination')} /><TextField label="From" value={form.from} onChange={update('from')} /></div>
+          </div>
+
+          <div className="atlas-form-section">
+            <div className="atlas-form-heading"><span className="step-icon"><CalendarDays size={17} /></span><div><strong>When are you travelling?</strong><small>Choose your trip window.</small></div></div>
+            <div className="atlas-field-grid"><TextField type="date" label="From date" value={form.startDate} onChange={update('startDate')} /><TextField type="date" label="To date" value={form.endDate} onChange={update('endDate')} /></div>
+          </div>
+
+          <div className="atlas-form-section">
+            <div className="atlas-form-heading"><span className="step-icon"><Wallet size={17} /></span><div><strong>Set your travel style</strong><small>AtlasAI will optimize around these constraints.</small></div></div>
+            <div className="atlas-field-grid three">
+              <TextField label="Travellers" value={form.travellers} onChange={update('travellers')} />
+              <TextField label="Budget (₹)" value={form.budget} onChange={update('budget')} />
+              <SelectField label="Comfort" value={form.comfort} onChange={update('comfort')} options={['Budget', 'Standard', 'Premium']} />
+            </div>
+            <div className="atlas-field-grid" style={{ marginTop: 12 }}>
+              <SelectField label="Travel mode" value={form.travelMode} onChange={update('travelMode')} options={['Flight', 'Train', 'Bus']} />
+            </div>
+          </div>
+
+          <div className="atlas-form-section">
+            <div className="atlas-form-heading"><span className="step-icon"><Heart size={17} /></span><div><strong>What are you into?</strong><small>Pick as many interests as you like.</small></div></div>
+            <div className="atlas-interest-row">{interests.map((interest) => { const active = selectedInterests.includes(interest); return <button type="button" key={interest} onClick={() => toggleInterest(interest)} className={`atlas-interest ${active ? 'active' : ''}`}>{active && <Check size={11} style={{display:'inline',marginRight:4}} />}{interest}</button> })}</div>
+          </div>
+
+          <button type="submit" className="btn-primary atlas-plan-submit"><Sparkles size={16} /> Generate my itinerary <ArrowRight size={15} /></button>
+        </div>
+
+        <aside className="atlas-ai-plan">
+          <div className="step-icon" style={{ background:'rgba(255,255,255,.10)', color:'#d5bcff' }}><Sparkles size={18} /></div>
+          <p className="atlas-eyebrow" style={{ color:'#bca4d5', marginTop:16 }}>AtlasAI</p>
+          <h3>One prompt.<br />A complete trip.</h3>
+          <p>We'll coordinate transport, stays, attractions and your budget into one plan.</p>
+          <div className="atlas-plan-summary">
+            <div><span>Destination</span><b>{form.destination}</b></div>
+            <div><span>Dates</span><b>{form.startDate} → {form.endDate}</b></div>
+            <div><span>Budget</span><b>₹{Number(form.budget || 0).toLocaleString()}</b></div>
+            <div><span>Travel</span><b>{form.travelMode}</b></div>
+            <div><span>Interests</span><b>{form.interests || 'None selected'}</b></div>
+          </div>
+        </aside>
+      </form>
+    </div>
+  )
+}
+
+===== pages/Itinerary.jsx =====
+import { useLocation, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Calendar, ArrowLeft, Sparkles, MapPin, Clock3, Plus, Copy, Printer, Check, Users } from 'lucide-react'
+import OrchestratorPanel from '../components/OrchestratorPanel'
+import DayTabs from '../components/itinerary/DayTabs'
+import TabBar from '../components/itinerary/TabBar'
+import StopDetailDrawer from '../components/itinerary/StopDetailDrawer'
+import AddStopModal from '../components/itinerary/AddStopModal'
+import ShareToGroupModal from '../components/itinerary/ShareToGroupModal'
+import OverviewPanel from '../components/itinerary/OverviewPanel'
+import BudgetPanel from '../components/itinerary/BudgetPanel'
+import InsightsPanel from '../components/itinerary/InsightsPanel'
+import SafetyPanel from '../components/itinerary/SafetyPanel'
+import { api } from '../services/api'
+
+function toMinutes(hhmm) {
+  if (!hhmm || !hhmm.includes(':')) return null
+  const [h, m] = hhmm.split(':').map(Number)
+  return h * 60 + m
+}
+
+function recomputeCompletion(day) {
+  const total = day.stops.length
+  const done = day.stops.filter((s) => s.completed).length
+  return total ? Math.round((done / total) * 100) : 0
+}
+
+export default function Itinerary() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [finalPlan, setFinalPlan] = useState(location.state?.finalPlan || null)
+  const [tripId] = useState(location.state?.tripId || null)
+  const [loading, setLoading] = useState(!location.state?.finalPlan && Boolean(location.state?.tripId))
+  const [dayIndex, setDayIndex] = useState(0)
+  const [activeTab, setActiveTab] = useState('plan')
+  const [selectedStopIndex, setSelectedStopIndex] = useState(null)
+  const [showAddStop, setShowAddStop] = useState(false)
+  const [showShare, setShowShare] = useState(false)
+  const [shared, setShared] = useState(false)
+  const [dragIndex, setDragIndex] = useState(null)
+  const [dragOver, setDragOver] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (finalPlan || !location.state?.tripId) return
+    let cancelled = false
+    api.getTrip(location.state.tripId)
+      .then(({ trip }) => { if (!cancelled) setFinalPlan(trip.finalPlan) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [finalPlan, location.state])
+
+  const persist = async (updated) => {
+    if (!tripId) return
+    try { await api.updateTrip(tripId, { finalPlan: updated }) } catch { /* non-blocking — local state already reflects the change */ }
+  }
+
+  const mutateDays = (mutator) => {
+    setFinalPlan((prev) => {
+      const days = prev.days.map((d) => ({ ...d, stops: d.stops.map((s) => ({ ...s })) }))
+      mutator(days)
+      days.forEach((d) => { d.completionPercent = recomputeCompletion(d) })
+      const updated = { ...prev, days }
+      persist(updated)
+      return updated
+    })
+  }
+
+  if (loading) return <div className="atlas-surface mx-auto max-w-md p-10 text-center"><Sparkles className="mx-auto text-accent animate-spin" /><p className="mt-4 text-sm atlas-muted">Loading your itinerary...</p></div>
+
+  if (!finalPlan) return <div className="atlas-surface mx-auto max-w-md p-10 text-center"><Sparkles className="mx-auto text-accent" /><h2 className="mt-4 text-lg font-bold">No trip generated yet</h2><p className="mt-2 text-sm atlas-muted">Start with your preferences and let AtlasAI build your itinerary.</p><button className="btn-primary mt-5" onClick={() => navigate('/plan')}>Plan a trip</button></div>
+
+  const budget = finalPlan.budget || {}
+  const day = finalPlan.days[dayIndex]
+  const selectedStop = selectedStopIndex !== null ? day.stops[selectedStopIndex] : null
+  const nextStop = selectedStopIndex !== null ? day.stops[selectedStopIndex + 1] : null
+  const travelTimeToNextMinutes = selectedStop && nextStop ? Math.max(toMinutes(nextStop.startTime) - toMinutes(selectedStop.endTime), 0) : null
+
+  const toggleComplete = () => mutateDays((days) => { days[dayIndex].stops[selectedStopIndex].completed = !days[dayIndex].stops[selectedStopIndex].completed })
+  const removeStop = () => { mutateDays((days) => { days[dayIndex].stops.splice(selectedStopIndex, 1) }); setSelectedStopIndex(null) }
+  const moveStop = (targetDayIndex) => {
+    if (targetDayIndex === dayIndex) return
+    mutateDays((days) => {
+      const [stop] = days[dayIndex].stops.splice(selectedStopIndex, 1)
+      days[targetDayIndex].stops.push(stop)
+      days[targetDayIndex].stops.sort((a, b) => (a.startTime > b.startTime ? 1 : -1))
+    })
+    setSelectedStopIndex(null)
+    setDayIndex(targetDayIndex)
+  }
+  const replaceStop = (alternative) => {
+    mutateDays((days) => {
+      days[dayIndex].stops[selectedStopIndex] = {
+        id: alternative.id,
+        label: alternative.name,
+        category: alternative.category,
+        area: alternative.area,
+        startTime: day.stops[selectedStopIndex].startTime,
+        endTime: day.stops[selectedStopIndex].endTime,
+        durationHours: alternative.durationHours,
+        estimatedCost: alternative.estimatedCost,
+        costKnown: alternative.costKnown !== false,
+        durationEstimated: Boolean(alternative.durationEstimated),
+        dataSource: alternative.dataSource,
+        notes: null,
+        completed: false,
+      }
+    })
+    setSelectedStopIndex(null)
+  }
+  const addStop = (stopData) => {
+    mutateDays((days) => {
+      const start = toMinutes(stopData.startTime)
+      const end = start + Math.round(stopData.durationHours * 60)
+      const endHHMM = `${String(Math.floor(end / 60) % 24).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`
+      const stop = { ...stopData, endTime: endHHMM }
+      days[dayIndex].stops.push(stop)
+      days[dayIndex].stops.sort((a, b) => (a.startTime > b.startTime ? 1 : -1))
+    })
+    setShowAddStop(false)
+  }
+
+  const onDragStart = (i) => setDragIndex(i)
+  const onDropStop = (i) => {
+    if (dragIndex === null || dragIndex === i) { setDragIndex(null); setDragOver(false); return }
+    mutateDays((days) => {
+      const stops = days[dayIndex].stops
+      const [moved] = stops.splice(dragIndex, 1)
+      stops.splice(i, 0, moved)
+    })
+    setDragIndex(null)
+    setDragOver(false)
+  }
+
+  const copySummary = () => {
+    const lines = [
+      `${finalPlan.destination} — ${finalPlan.days.length} day(s)`,
+      `${finalPlan.startDate || ''} → ${finalPlan.endDate || ''}`,
+      `Estimated cost: ₹${(budget.total || 0).toLocaleString()}`,
+      '',
+      ...finalPlan.days.flatMap((d) => [
+        `Day ${d.dayNumber} (${d.theme})`,
+        ...d.stops.map((s) => `  ${s.startTime} — ${s.label}`),
+        '',
+      ]),
+    ]
+    navigator.clipboard.writeText(lines.join('\n')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
+  }
+
+  return (
+    <div>
+      <section className="atlas-itinerary-head">
+        <div>
+          <button onClick={() => navigate('/plan')} className="mb-4 inline-flex items-center gap-1.5 border-0 bg-transparent text-[10px] font-bold text-[var(--subtle)]"><ArrowLeft size={13} /> Edit trip</button>
+          <p className="atlas-eyebrow">{finalPlan.approved ? 'AI-generated itinerary' : 'AI-generated itinerary (review needed)'}</p>
+          <h1 className="atlas-page-title">{finalPlan.destination} Getaway</h1>
+          <p className="atlas-page-copy"><Calendar size={13} style={{ display: 'inline' }} /> {finalPlan.startDate || '—'} → {finalPlan.endDate || '—'} · {finalPlan.days.length} days</p>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end' }}>
+          <div className="atlas-itinerary-summary">
+            <span className="atlas-pill">₹{(budget.total || 0).toLocaleString()} estimated</span>
+            {budget.remaining != null && <span className="atlas-pill">₹{Math.abs(budget.remaining).toLocaleString()} {budget.violated ? 'over' : 'remaining'}</span>}
+            <span className="atlas-pill">{Math.round(budget.percentUsed || 0)}% budget</span>
+          </div>
+          <div className="atlas-itinerary-actions">
+            <button onClick={() => setShowShare(true)} disabled={!tripId} title={!tripId ? 'This trip was not saved, so it can\'t be shared yet' : undefined}><Users size={13} /> Share to group</button>
+            <button onClick={copySummary}>{copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Copy summary'}</button>
+            <button onClick={() => window.print()}><Printer size={13} /> Print</button>
+          </div>
+        </div>
+      </section>
+
+      <TabBar active={activeTab} onChange={setActiveTab} />
+
+      {activeTab === 'plan' && (
+        <>
+          <DayTabs days={finalPlan.days} activeIndex={dayIndex} onSelect={(i) => { setDayIndex(i); setSelectedStopIndex(null) }} />
+
+          <div className="atlas-itinerary-layout">
+            <div>
+              <div className="atlas-day-shell">
+                <div className="atlas-day-header">
+                  <div><strong>Day {day.dayNumber}</strong><small>{day.date || day.theme} · {day.completionPercent || 0}% complete</small></div>
+                  <span className="atlas-day-count">{day.stops.length} stops</span>
+                </div>
+                <div className={`atlas-timeline ${dragOver ? 'is-drag-over' : ''}`} onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)}>
+                  {day.stops.map((stop, index) => (
+                    <div
+                      className={`atlas-stop ${stop.completed ? 'is-complete' : ''} ${dragIndex === index ? 'is-dragging' : ''}`}
+                      key={`${stop.id || stop.label}-${index}`}
+                      draggable
+                      onDragStart={() => onDragStart(index)}
+                      onDragEnd={() => { setDragIndex(null); setDragOver(false) }}
+                      onDrop={(e) => { e.preventDefault(); onDropStop(index) }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onClick={() => setSelectedStopIndex(index)}
+                    >
+                      <span className="atlas-stop-dot"><MapPin size={14} /></span>
+                      <span className="atlas-stop-time"><Clock3 size={11} style={{ display: 'inline', marginRight: 4 }} />{stop.startTime}</span>
+                      <span className="atlas-stop-label">{stop.label}{stop.estimatedCost ? ` · ₹${stop.estimatedCost}` : ''}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="atlas-add-stop-row">
+                  <button className="atlas-add-stop-btn" onClick={() => setShowAddStop(true)}><Plus size={13} /> Add a stop to this day</button>
+                </div>
+              </div>
+            </div>
+
+            <OrchestratorPanel finalPlan={finalPlan} />
+          </div>
+        </>
+      )}
+
+      {activeTab === 'overview' && <OverviewPanel finalPlan={finalPlan} />}
+      {activeTab === 'budget' && <BudgetPanel finalPlan={finalPlan} />}
+      {activeTab === 'insights' && <InsightsPanel finalPlan={finalPlan} />}
+      {activeTab === 'safety' && (tripId ? <SafetyPanel tripId={tripId} /> : <p style={{ marginTop: 20, fontSize: 12, color: 'var(--muted)' }}>Save this trip to unlock location sharing and emergency alerts.</p>)}
+
+      {selectedStop && (
+        <StopDetailDrawer
+          stop={selectedStop}
+          dayIndex={dayIndex}
+          dayCount={finalPlan.days.length}
+          travelTimeToNextMinutes={travelTimeToNextMinutes}
+          alternatives={finalPlan.activityAlternatives}
+          onClose={() => setSelectedStopIndex(null)}
+          onToggleComplete={toggleComplete}
+          onRemove={removeStop}
+          onMove={moveStop}
+          onReplace={replaceStop}
+        />
+      )}
+
+      {showAddStop && <AddStopModal onAdd={addStop} onClose={() => setShowAddStop(false)} />}
+
+      {showShare && tripId && (
+        <ShareToGroupModal
+          tripId={tripId}
+          destination={finalPlan.destination}
+          onClose={() => setShowShare(false)}
+          onShared={() => { setShowShare(false); setShared(true); setTimeout(() => setShared(false), 3000) }}
+        />
+      )}
+      {shared && (
+        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: 'var(--color-success)', color: '#fff', padding: '10px 18px', borderRadius: 12, fontSize: 12, fontWeight: 700, zIndex: 95 }}>
+          Shared to group
+        </div>
+      )}
+    </div>
+  )
+}
+
+===== components/GenerateTripLoader.jsx =====
+import { useEffect, useRef } from 'react'
+import { CheckCircle2, Loader2, AlertTriangle, Sparkles } from 'lucide-react'
+import { useAgentStream } from '../hooks/useAgentStream'
+
+// Collapse the raw trace (which has a 'running' + a terminal entry per agent,
+// plus retry entries) into one row per agent showing its latest status —
+// this is what actually happened, not a scripted animation.
+function collapseTrace(trace) {
+  const order = []
+  const byKey = {}
+  for (const entry of trace) {
+    const key = `${entry.agent}__${entry.iteration}`
+    if (!byKey[key]) {
+      byKey[key] = { ...entry }
+      order.push(key)
+    } else {
+      byKey[key] = { ...byKey[key], ...entry }
+    }
+  }
+  return order.map((k) => byKey[k])
+}
+
+export default function GenerateTripLoader({ tripRequest, onDone, onError }) {
+  const { start, trace, status, result, error } = useAgentStream()
+  const startedRef = useRef(false)
+
+  useEffect(() => {
+    if (startedRef.current) return
+    startedRef.current = true
+    start(tripRequest)
+  }, [start, tripRequest])
+
+  useEffect(() => {
+    if (status === 'done' && result) onDone(result)
+    if (status === 'error' && error) onError?.(error)
+  }, [status, result, error, onDone, onError])
+
+  const rows = collapseTrace(trace)
+
+  return (
+    <div className="atlas-ai-plan">
+      <div className="step-icon" style={{ background: 'rgba(255,255,255,.10)', color: '#d5bcff' }}><Sparkles size={19} /></div>
+      <p className="atlas-eyebrow" style={{ color: '#bca4d5', marginTop: 15 }}>AtlasAI</p>
+      <h3>Building your perfect trip</h3>
+      <p>{status === 'error' ? 'Something went wrong while planning.' : 'Coordinating transport, stays and activities in real time...'}</p>
+
+      <div className="atlas-ai-log" style={{ marginTop: 20 }}>
+        {rows.map((entry, i) => {
+          const isRunning = entry.status === 'running' || entry.status === 'retrying'
+          const isError = entry.status === 'error'
+          const isWarning = entry.status === 'warning'
+          return (
+            <div key={`${entry.agent}-${entry.iteration}-${i}`} style={{ padding: '7px 0', color: isRunning ? '#fff' : '#d8cfe0' }}>
+              {isError ? <AlertTriangle size={16} color="#f87171" />
+                : isWarning ? <AlertTriangle size={16} color="#facc15" />
+                : isRunning ? <Loader2 size={16} className="animate-spin" color="#c6a8ff" />
+                : <CheckCircle2 size={16} color="#86efac" />}
+              <span style={{ fontSize: 10 }}>
+                {entry.iteration > 0 ? `[Replan ${entry.iteration}] ` : ''}{entry.agent}
+                {entry.summary ? ` — ${entry.summary}` : ''}
+                {typeof entry.ms === 'number' ? ` (${entry.ms}ms)` : ''}
+              </span>
+            </div>
+          )
+        })}
+        {status === 'error' && (
+          <div style={{ padding: '7px 0', color: '#f87171', fontSize: 10 }}>{error}</div>
+        )}
+      </div>
+
+      <div style={{ height: 6, marginTop: 17, borderRadius: 99, background: 'rgba(255,255,255,.10)', overflow: 'hidden' }}>
+        <div
+          style={{
+            height: '100%',
+            width: status === 'done' ? '100%' : `${Math.min((rows.filter((r) => r.status !== 'running' && r.status !== 'retrying').length / Math.max(rows.length, 6)) * 100, 95)}%`,
+            background: status === 'error' ? '#f87171' : 'linear-gradient(90deg,#7c3aed,#d24bd1,#ff765f)',
+            transition: 'width .4s',
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
+===== components/OrchestratorPanel.jsx =====
+import { CheckCircle2, AlertTriangle, RotateCcw, Zap } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+
+// Renders the *real* reasoning AtlasAI's agents produced for this plan —
+// each line comes from an agent's structured `reasoning`/`summary` output,
+// never a hardcoded script.
+export default function OrchestratorPanel({ finalPlan }) {
+  const navigate = useNavigate()
+
+  if (!finalPlan) return null
+
+  const rows = [
+    finalPlan.transport && ['Transport selected', finalPlan.transport?.provider ? `${finalPlan.transport.mode} via ${finalPlan.transport.provider}` : null],
+    finalPlan.stay && ['Stay selected', finalPlan.stay?.name ? `${finalPlan.stay.name} (${finalPlan.stay.area})` : null],
+    finalPlan.budget && ['Budget check', `₹${finalPlan.budget.total?.toLocaleString()} total (${finalPlan.budget.percentUsed ?? '—'}% of budget)`],
+    ['Plan review', finalPlan.approved ? 'Approved — no blocking issues' : `${finalPlan.remainingIssues?.length || 0} unresolved issue(s)`],
+  ].filter((r) => r && r[1])
+
+  return (
+    <div className="atlas-ai-side">
+      <p className="atlas-eyebrow" style={{ color: '#c6a8ff' }}>AtlasAI intelligence</p>
+      <h3>How this plan came together.</h3>
+      <div className="atlas-ai-log">
+        {rows.map(([a, b]) => (
+          <div key={a}>
+            <span>{finalPlan.approved ? <CheckCircle2 size={11} /> : <AlertTriangle size={11} />}</span>
+            <div><b>{a}</b><div style={{ marginTop: 3, color: '#9e94a9', fontSize: 8 }}>{b}</div></div>
+          </div>
+        ))}
+      </div>
+
+      {!finalPlan.approved && finalPlan.remainingIssues?.length > 0 && (
+        <div style={{ marginTop: 14, fontSize: 8, color: '#facc15' }}>
+          {finalPlan.remainingIssues.map((i) => <div key={i.type} style={{ padding: '3px 0' }}>⚠ {i.detail || i.type}</div>)}
+        </div>
+      )}
+
+      <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,.1)', fontSize: 8, color: '#aaa0b4', display: 'flex', gap: 7 }}>
+        <Zap size={13} color="#c6a8ff" /> {finalPlan.dataSource === 'sample' ? 'Sample/demo travel data — not live pricing or availability.' : 'Multiple services coordinated into one result.'}
+      </div>
+
+      <button
+        onClick={() => navigate('/plan')}
+        style={{ marginTop: 14, border: 0, background: 'transparent', color: '#d0b7ff', fontSize: 9, fontWeight: 800, display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
+      >
+        <RotateCcw size={12} /> Re-plan itinerary
+      </button>
+    </div>
+  )
+}
+
+===== components/itinerary/BudgetPanel.jsx =====
+import { AlertTriangle } from 'lucide-react'
+
+const SEGMENTS = [
+  { key: 'transport', label: 'Transport', color: '#7c3aed' },
+  { key: 'stay', label: 'Stay', color: '#d24bd1' },
+  { key: 'activities', label: 'Activities', color: '#ff765f' },
+  { key: 'food', label: 'Food', color: '#f59e0b' },
+  { key: 'localTravel', label: 'Local travel', color: '#22c55e' },
+  { key: 'contingency', label: 'Contingency', color: '#64748b' },
+]
+
+export default function BudgetPanel({ finalPlan }) {
+  const budget = finalPlan.budget || {}
+  const breakdown = budget.breakdown || {}
+  const total = budget.total || 1
+
+  return (
+    <div className="atlas-surface" style={{ padding: 24, marginTop: 20 }}>
+      <p className="atlas-eyebrow">Budget breakdown</p>
+      <h3 style={{ marginTop: 6, fontSize: 20 }}>
+        {finalPlan.dataSource === 'sample' ? 'Estimated from sample pricing' : 'Estimated trip cost'}
+      </h3>
+
+      <div className="atlas-budget-bar">
+        {SEGMENTS.map((seg) => {
+          const value = breakdown[seg.key] || 0
+          const pct = (value / total) * 100
+          return pct > 0 ? <div key={seg.key} className="atlas-budget-seg" style={{ width: `${pct}%`, background: seg.color }} title={`${seg.label}: ₹${value.toLocaleString()}`} /> : null
+        })}
+      </div>
+
+      <div className="atlas-budget-legend">
+        {SEGMENTS.map((seg) => (
+          <div className="atlas-budget-legend-row" key={seg.key}>
+            <span><span className="dot" style={{ background: seg.color }} />{seg.label}</span>
+            <b>₹{(breakdown[seg.key] || 0).toLocaleString()}</b>
+          </div>
+        ))}
+      </div>
+
+      <div className="atlas-budget-total">
+        <div><span style={{ fontSize: 10, color: 'var(--muted)' }}>Total estimated</span><br /><strong>₹{total.toLocaleString()}</strong></div>
+        {budget.budget != null && (
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 10, color: 'var(--muted)' }}>{budget.violated ? 'Over by' : 'Remaining'}</span><br />
+            <strong style={{ color: budget.violated ? 'var(--color-danger)' : 'var(--color-success)' }}>
+              ₹{Math.abs(budget.remaining ?? 0).toLocaleString()}
+            </strong>
+          </div>
+        )}
+      </div>
+
+      {budget.violated && (
+        <div className="atlas-budget-warn">
+          <AlertTriangle size={14} /> This plan is {budget.percentUsed}% of your stated budget. Consider a lower comfort tier or fewer activities.
+        </div>
+      )}
+    </div>
+  )
+}
+
+===== components/itinerary/OverviewPanel.jsx =====
+import { Plane, Hotel, MapPinned, Wallet, CalendarDays, CheckCircle2 } from 'lucide-react'
+
+export default function OverviewPanel({ finalPlan }) {
+  const totalActivities = finalPlan.days.reduce((sum, d) => sum + d.stops.filter((s) => s.id).length, 0)
+  const totalStops = finalPlan.days.reduce((sum, d) => sum + d.stops.length, 0)
+  const completedStops = finalPlan.days.reduce((sum, d) => sum + d.stops.filter((s) => s.completed).length, 0)
+  const overallCompletion = totalStops ? Math.round((completedStops / totalStops) * 100) : 0
+
+  const cards = [
+    { icon: Plane, label: 'Transport', value: finalPlan.transport?.mode || '—', sub: finalPlan.transport?.provider },
+    { icon: Hotel, label: 'Accommodation', value: finalPlan.stay?.name || '—', sub: finalPlan.stay?.area },
+    { icon: MapPinned, label: 'Total activities', value: totalActivities, sub: `across ${finalPlan.days.length} day(s)` },
+    { icon: Wallet, label: 'Estimated total cost', value: `₹${(finalPlan.budget?.total || 0).toLocaleString()}`, sub: finalPlan.budget?.budget ? `of ₹${finalPlan.budget.budget.toLocaleString()} budget` : null },
+    { icon: CalendarDays, label: 'Trip duration', value: `${finalPlan.days.length} days`, sub: `${finalPlan.startDate || '—'} → ${finalPlan.endDate || '—'}` },
+    { icon: CheckCircle2, label: 'Completion', value: `${overallCompletion}%`, sub: `${completedStops}/${totalStops} stops done` },
+  ]
+
+  return (
+    <div className="atlas-overview-grid">
+      {cards.map(({ icon: Icon, label, value, sub }) => (
+        <div className="atlas-overview-card" key={label}>
+          <span><Icon size={13} style={{ display: 'inline', marginRight: 6 }} />{label}</span>
+          <strong>{value}</strong>
+          {sub && <small>{sub}</small>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+===== components/itinerary/InsightsPanel.jsx =====
+import { Sparkles, AlertTriangle, ShieldCheck } from 'lucide-react'
+
+export default function InsightsPanel({ finalPlan }) {
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div className="atlas-surface" style={{ padding: '14px 18px', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <Sparkles size={16} color="var(--accent)" />
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+          Why AtlasAI chose this — generated by the planning agents, not a live model call.
+          {finalPlan.dataSource === 'sample' && ' Based on sample/demo travel data, not live pricing.'}
+          {(finalPlan.sources?.activities === 'live' || finalPlan.sources?.activities === 'cached') && ` Places come from OpenTripMap${finalPlan.sources.activities === 'cached' ? ' (cached)' : ''}; place prices are not provided, so they are not counted in the budget.`}
+        </span>
+      </div>
+
+      {finalPlan.insights?.map((insight) => (
+        <div className="atlas-insight-card" key={insight.agent}>
+          <b>{insight.title}</b>
+          <p>{insight.detail}</p>
+        </div>
+      ))}
+
+      {!finalPlan.approved && finalPlan.remainingIssues?.length > 0 && (
+        <div className="atlas-insight-card" style={{ borderColor: 'rgba(239,68,68,.35)' }}>
+          <b style={{ color: 'var(--color-danger)', display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={13} /> Unresolved issues</b>
+          {finalPlan.remainingIssues.map((issue) => (
+            <p key={issue.type}>{issue.detail || issue.type}</p>
+          ))}
+        </div>
+      )}
+
+      {finalPlan.safety?.data && (
+        <div className="atlas-insight-card">
+          <b style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ShieldCheck size={13} /> Safety notes</b>
+          <p>{finalPlan.safety.data.destinationRisk}. {finalPlan.safety.data.weatherNote}</p>
+          <p style={{ marginTop: 8 }}>{finalPlan.safety.data.disclaimer}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+===== components/itinerary/StopDetailDrawer.jsx =====
+import { X, Clock3, MapPin, Wallet, CheckCircle2, Trash2, ArrowRightLeft, CalendarDays } from 'lucide-react'
+import { useState } from 'react'
+
+export default function StopDetailDrawer({ stop, dayIndex, dayCount, travelTimeToNextMinutes, alternatives, onClose, onToggleComplete, onRemove, onMove, onReplace }) {
+  const [showAlternatives, setShowAlternatives] = useState(false)
+  const isActivity = Boolean(stop.id)
+
+  return (
+    <>
+      <button className="atlas-drawer-backdrop" aria-label="Close" onClick={onClose} />
+      <div className="atlas-drawer" role="dialog" aria-modal="true">
+        <div className="atlas-drawer-head">
+          <div>
+            <p className="atlas-eyebrow" style={{ margin: 0 }}>{stop.category}</p>
+            <h3 style={{ marginTop: 4, fontSize: 19 }}>{stop.label}</h3>
+          </div>
+          <button className="atlas-drawer-close" onClick={onClose} aria-label="Close panel"><X size={15} /></button>
+        </div>
+
+        <div className="atlas-drawer-section">
+          <span className="atlas-drawer-label">Details</span>
+          <div className="atlas-drawer-row"><span><Clock3 size={12} style={{ display: 'inline', marginRight: 6 }} />Time</span><b>{stop.startTime} – {stop.endTime}</b></div>
+          {stop.area && <div className="atlas-drawer-row"><span><MapPin size={12} style={{ display: 'inline', marginRight: 6 }} />Area</span><b>{stop.area}</b></div>}
+          <div className="atlas-drawer-row"><span><Wallet size={12} style={{ display: 'inline', marginRight: 6 }} />Estimated cost</span><b>{stop.costKnown === false ? 'Not listed by provider' : stop.estimatedCost ? `₹${stop.estimatedCost.toLocaleString()}` : 'Free'}</b></div>
+          {stop.travelToNext ? (
+            <div className="atlas-drawer-row">
+              <span>Travel to next stop</span>
+              <b>{stop.travelToNext.distanceKm} km · ~{stop.travelToNext.durationMinutes} min ({stop.travelToNext.mode})</b>
+            </div>
+          ) : typeof travelTimeToNextMinutes === 'number' && (
+            <div className="atlas-drawer-row"><span>Travel time to next stop</span><b>~{travelTimeToNextMinutes} min (estimated)</b></div>
+          )}
+          {stop.notes && <div className="atlas-drawer-row"><span>Notes</span><b style={{ textAlign: 'right', maxWidth: 220 }}>{stop.notes}</b></div>}
+        </div>
+
+        <div className="atlas-drawer-section">
+          <span className="atlas-drawer-label">Completion</span>
+          <button className={`atlas-complete-toggle ${stop.completed ? 'is-checked' : ''}`} style={{ marginTop: 8, width: '100%' }} onClick={onToggleComplete}>
+            <CheckCircle2 size={15} /> {stop.completed ? 'Marked as complete' : 'Mark as complete'}
+          </button>
+        </div>
+
+        {isActivity && dayCount > 1 && (
+          <div className="atlas-drawer-section">
+            <span className="atlas-drawer-label"><CalendarDays size={11} style={{ display: 'inline', marginRight: 4 }} />Move to another day</span>
+            <select
+              className="atlas-move-select"
+              value={dayIndex}
+              onChange={(e) => onMove(Number(e.target.value))}
+            >
+              {Array.from({ length: dayCount }).map((_, i) => (
+                <option key={i} value={i}>Day {i + 1}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {isActivity && alternatives?.length > 0 && (
+          <div className="atlas-drawer-section">
+            <span className="atlas-drawer-label"><ArrowRightLeft size={11} style={{ display: 'inline', marginRight: 4 }} />Replace with an alternative</span>
+            {!showAlternatives ? (
+              <button className="atlas-add-stop-btn" style={{ marginTop: 8 }} onClick={() => setShowAlternatives(true)}>Show {alternatives.length} alternative(s)</button>
+            ) : (
+              <div className="atlas-alt-list">
+                {alternatives.map((alt) => (
+                  <button key={alt.id} className="atlas-alt-option" onClick={() => onReplace(alt)}>
+                    <b>{alt.name}</b>
+                    <span>{alt.area} · ₹{alt.estimatedCost} · {alt.durationHours}h</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="atlas-drawer-actions">
+          <button className="danger" onClick={onRemove}><Trash2 size={13} /> Remove stop</button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+===== components/itinerary/DayTabs.jsx =====
+export default function DayTabs({ days, activeIndex, onSelect }) {
+  return (
+    <div className="atlas-day-tabs">
+      {days.map((day, i) => (
+        <button key={day.dayNumber} className={`atlas-day-tab ${i === activeIndex ? 'is-active' : ''}`} onClick={() => onSelect(i)}>
+          <strong>Day {day.dayNumber}</strong>
+          <small>{day.date || day.theme}{day.weather?.tempMaxC != null ? ` · ${day.weather.tempMinC}–${day.weather.tempMaxC}°C ${day.weather.condition || ''}`.trimEnd() : ''}</small>
+          <span className="atlas-day-progress"><i style={{ width: `${day.completionPercent || 0}%` }} /></span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+===== components/Navbar.jsx =====
+import { useMemo, useState } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { Bell, Search, Menu, MapPin, Compass, Briefcase, Command, UserRound } from 'lucide-react'
+import ThemeToggle from './ThemeToggle'
+import NotificationPanel from './NotificationPanel'
+import { useAuth } from '../context/AuthContext'
+import { useNotifications } from '../context/NotificationContext'
+import { trips, bookings, attractions } from '../data/mockData'
+
+const navItems = [
+  { to: '/', label: 'Home', end: true },
+  { to: '/plan', label: 'Plan Trip' },
+  { to: '/attractions', label: 'Explore' },
+  { to: '/bookings', label: 'Trips' },
+  { to: '/group', label: 'Group' },
+  { to: '/expenses', label: 'Expenses' },
+]
+
+export default function Navbar({ mobileOpen, onMenuClick, onCloseMenu }) {
+  const navigate = useNavigate()
+  const { user, isAuthenticated } = useAuth()
+  const { unreadCount } = useNotifications()
+  const [query, setQuery] = useState('')
+  const [focused, setFocused] = useState(false)
+  const [showNotifications, setShowNotifications] = useState(false)
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+
+    const tripResults = trips
+      .filter((t) => `${t.destination} ${t.from}`.toLowerCase().includes(q))
+      .map((t) => ({ id: t.id, title: `${t.destination} trip`, subtitle: `${t.from} · ${t.startDate} → ${t.endDate}`, type: 'Trip', icon: MapPin, path: '/' }))
+
+    const bookingResults = bookings
+      .filter((b) => `${b.name} ${b.type}`.toLowerCase().includes(q))
+      .map((b) => ({ id: b.id, title: b.name, subtitle: `${b.type} · ${b.date}`, type: 'Booking', icon: Briefcase, path: '/bookings' }))
+
+    const attractionResults = attractions
+      .filter((a) => `${a.name} ${a.category} ${a.destination}`.toLowerCase().includes(q))
+      .map((a) => ({ id: a.id, title: a.name, subtitle: `${a.category} · ${a.destination}`, type: 'Place', icon: Compass, path: '/attractions' }))
+
+    return [...tripResults, ...bookingResults, ...attractionResults].slice(0, 6)
+  }, [query])
+
+  const showResults = focused && query.trim()
+
+  const selectResult = (result) => {
+    navigate(result.path)
+    setQuery('')
+    setFocused(false)
+    onCloseMenu?.()
+  }
+
+  return (
+    <header className="atlas-header">
+      <div className="atlas-header-inner">
+        <button className="atlas-mobile-menu" onClick={onMenuClick} aria-label="Open navigation">
+          <Menu size={20} />
+        </button>
+
+        <button className="atlas-brand" onClick={() => navigate('/')} aria-label="AtlasAI home">
+          <span className="atlas-brand-mark"><span>A</span></span>
+          <span className="atlas-brand-copy">
+            <strong>Atlas<span>AI</span></strong>
+            <small>AI TRAVEL STUDIO</small>
+          </span>
+        </button>
+
+        <nav className={`atlas-nav ${mobileOpen ? 'is-open' : ''}`} aria-label="Primary navigation">
+          {navItems.map(({ to, label, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              onClick={onCloseMenu}
+              className={({ isActive }) => `atlas-nav-link ${isActive ? 'is-active' : ''}`}
+            >
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="atlas-header-actions">
+          <div className="atlas-search-wrap">
+            <Search size={17} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setFocused(true)}
+              placeholder="Search trips, places..."
+              aria-label="Search trips and places"
+            />
+            <span className="atlas-search-shortcut"><Command size={10} /> K</span>
+
+            {showResults && (
+              <>
+                <button className="atlas-search-backdrop" aria-label="Close search" onClick={() => setFocused(false)} />
+                <div className="atlas-search-results">
+                  {results.length ? results.map((result) => {
+                    const Icon = result.icon
+                    return (
+                      <button key={`${result.type}-${result.id}`} onClick={() => selectResult(result)}>
+                        <span className="atlas-result-icon"><Icon size={15} /></span>
+                        <span><b>{result.title}</b><small>{result.subtitle}</small></span>
+                        <em>{result.type}</em>
+                      </button>
+                    )
+                  }) : <div className="atlas-empty-search"><Search size={18} /><b>No matches found</b><small>Try a destination, booking or attraction.</small></div>}
+                </div>
+              </>
+            )}
+          </div>
+
+          <ThemeToggle />
+
+          <button
+            className="atlas-icon-button atlas-notification"
+            aria-label="Notifications"
+            onClick={() => setShowNotifications((s) => !s)}
+          >
+            <Bell size={18} />
+            {unreadCount > 0 && <span />}
+          </button>
+          {showNotifications && <NotificationPanel onClose={() => setShowNotifications(false)} />}
+
+          <button className="atlas-profile-button" onClick={() => navigate(isAuthenticated ? '/profile' : '/login')} aria-label="Open profile">
+            <span className="atlas-avatar">{isAuthenticated ? user.username[0].toUpperCase() : <UserRound size={13} />}</span>
+            <span className="atlas-profile-copy"><b>{isAuthenticated ? user.username : 'Sign in'}</b><small>{isAuthenticated ? (user.role === 'admin' ? 'Admin' : 'Traveler') : 'Not signed in'}</small></span>
+            <UserRound size={15} className="atlas-profile-icon" />
+          </button>
+        </div>
+      </div>
+
+      {mobileOpen && <div className="atlas-mobile-nav-overlay" onClick={onCloseMenu} />}
+    </header>
+  )
+}
+
+===== data/mockData.js =====
+export const trips = [
+  { id: 't1', destination: 'Manali', from: 'New Delhi', startDate: '2026-09-20', endDate: '2026-09-25', budget: 35000, spent: 22400, status: 'upcoming' },
+  { id: 't2', destination: 'Goa', from: 'Mumbai', startDate: '2026-11-10', endDate: '2026-11-14', budget: 28000, spent: 0, status: 'planned' },
+]
+
+export const flights = [
+  { id: 'f1', provider: 'IndiGo', route: 'DEL → KUL', time: '06:20 AM, 20 Sep', price: 4200, status: 'Available' },
+  { id: 'f2', provider: 'Air India', route: 'DEL → KUL', time: '11:45 AM, 20 Sep', price: 5100, status: 'Available' },
+  { id: 'f3', provider: 'Vistara', route: 'DEL → KUL', time: '04:10 PM, 20 Sep', price: 4800, status: 'Available' },
+]
+
+export const trains = [
+  { id: 'tr1', provider: 'IRCTC', route: 'New Delhi → Manali (via Chandigarh)', time: '09:00 PM, 19 Sep', price: 1450, status: 'Available' },
+  { id: 'tr2', provider: 'IRCTC', route: 'New Delhi → Manali (Volvo connect)', time: '10:30 PM, 19 Sep', price: 1650, status: 'Available' },
+]
+
+export const buses = [
+  { id: 'b1', provider: 'RedBus — HRTC Volvo', route: 'Delhi → Manali', time: '08:00 PM, 19 Sep', price: 1200, status: 'Available' },
+  { id: 'b2', provider: 'RedBus — Zing Bus', route: 'Delhi → Manali', time: '09:15 PM, 19 Sep', price: 950, status: 'Available' },
+  { id: 'b3', provider: 'FlixBus', route: 'Delhi → Manali', time: '07:30 PM, 19 Sep', price: 1100, status: 'Available' },
+]
+
+export const hotels = [
+  { id: 'h1', provider: 'Grand Hyatt Manali', route: 'Old Manali', time: 'Check-in 3 PM', price: 8500, status: 'Available' },
+  { id: 'h2', provider: 'Snow Valley Resorts', route: 'Manali Mall Road', time: 'Check-in 12 PM', price: 5200, status: 'Available' },
+  { id: 'h3', provider: 'Zostel Manali', route: 'Old Manali', time: 'Check-in 11 AM', price: 1800, status: 'Available' },
+]
+
+export const rentals = [
+  { id: 'r1', provider: 'Hertz', route: 'Royal Enfield Himalayan', time: 'Self-pickup, Manali', price: 1500, status: 'Available' },
+  { id: 'r2', provider: 'Avis', route: 'Mahindra Thar 4x4', time: 'Self-pickup, Manali', price: 3200, status: 'Available' },
+]
+
+export const attractions = [
+  { id: 'a1', name: 'Solang Valley', category: 'Adventure', rating: 4.6, cost: 800, destination: 'Manali' },
+  { id: 'a2', name: 'Hadimba Temple', category: 'Culture', rating: 4.5, cost: 0, destination: 'Manali' },
+  { id: 'a3', name: 'Rohtang Pass', category: 'Nature', rating: 4.7, cost: 1200, destination: 'Manali' },
+  { id: 'a4', name: 'Old Manali Cafes', category: 'Food', rating: 4.4, cost: 500, destination: 'Manali' },
+  { id: 'a5', name: 'Jogini Waterfall', category: 'Nature', rating: 4.3, cost: 0, destination: 'Manali' },
+]
+
+export const bookings = [
+  { id: 'bk1', type: 'Flight', name: 'IndiGo DEL → KUL', date: '20 Sep', price: 4200, status: 'Confirmed' },
+  { id: 'bk2', type: 'Hotel', name: 'Grand Hyatt Manali', date: '20–25 Sep', price: 8500, status: 'Pending' },
+  { id: 'bk3', type: 'Rental', name: 'Hertz — Royal Enfield', date: '21 Sep', price: 1500, status: 'Confirmed' },
+]
+
+export const expenses = [
+  { id: 'e1', category: 'Transport', label: 'Train tickets', amount: 2900, date: '19 Sep' },
+  { id: 'e2', category: 'Hotel', label: 'Grand Hyatt advance', amount: 4250, date: '18 Sep' },
+  { id: 'e3', category: 'Food', label: 'Cafe hopping', amount: 1200, date: '20 Sep' },
+]
+
+export const groupMembers = [
+  { id: 'g1', name: 'Simrandeep', role: 'Admin', online: true },
+  { id: 'g2', name: 'Aarav Mehta', role: 'Editor', online: true },
+  { id: 'g3', name: 'Priya Sharma', role: 'Viewer', online: false },
+]
+
+export const chatMessages = [
+  { id: 'c1', sender: 'Aarav Mehta', text: 'Should we book the Volvo bus or the train?', time: '10:02 AM' },
+  { id: 'c2', sender: 'Simrandeep', text: 'Train — cheaper and scenic', time: '10:05 AM' },
+]
+
+export const generationSteps = [
+  'Understanding preferences',
+  'Finding transportation',
+  'Comparing hotels',
+  'Finding attractions',
+  'Checking budget',
+  'Optimizing itinerary',
+]
+
+===== services/api.js =====
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api'
+const TOKEN_KEY = 'atlasai_token'
+
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setToken(token) {
+  if (token) localStorage.setItem(TOKEN_KEY, token)
+  else localStorage.removeItem(TOKEN_KEY)
+}
+
+export class ApiError extends Error {
+  constructor(message, status, code, details) {
+    super(message)
+    this.status = status
+    this.code = code
+    this.details = details
+  }
+}
+
+export async function apiFetch(path, { method = 'GET', body, headers = {} } = {}) {
+  const token = getToken()
+  const res = await fetch(`${API_URL}${path}`, {
+    method,
+    credentials: 'include',
+    headers: {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+
+  if (res.status === 204) return null
+
+  let data
+  try {
+    data = await res.json()
+  } catch {
+    data = null
+  }
+
+  if (!res.ok) {
+    const err = data?.error || {}
+    throw new ApiError(err.message || `Request failed (${res.status})`, res.status, err.code, err.details)
+  }
+
+  return data
+}
+
+export const api = {
+  register: (payload) => apiFetch('/auth/register', { method: 'POST', body: payload }),
+  login: (payload) => apiFetch('/auth/login', { method: 'POST', body: payload }),
+  me: () => apiFetch('/auth/me'),
+  logout: () => apiFetch('/auth/logout', { method: 'POST' }),
+
+  updateProfile: (payload) => apiFetch('/users/me', { method: 'PATCH', body: payload }),
+  searchUsers: (q) => apiFetch(`/users/search?q=${encodeURIComponent(q)}`),
+
+  listTrips: () => apiFetch('/trips'),
+  getTrip: (id) => apiFetch(`/trips/${id}`),
+  updateTrip: (id, payload) => apiFetch(`/trips/${id}`, { method: 'PATCH', body: payload }),
+
+  getAgentRun: (id) => apiFetch(`/ai/runs/${id}`),
+
+  listGroups: () => apiFetch('/groups'),
+  createGroup: (payload) => apiFetch('/groups', { method: 'POST', body: payload }),
+  getGroup: (id) => apiFetch(`/groups/${id}`),
+  updateGroup: (id, payload) => apiFetch(`/groups/${id}`, { method: 'PATCH', body: payload }),
+  deleteGroup: (id) => apiFetch(`/groups/${id}`, { method: 'DELETE' }),
+  inviteToGroup: (id, payload) => apiFetch(`/groups/${id}/invites`, { method: 'POST', body: payload }),
+  removeGroupMember: (id, userId) => apiFetch(`/groups/${id}/members/${userId}`, { method: 'DELETE' }),
+  myInvites: () => apiFetch('/groups/invites'),
+  previewInvite: (token) => apiFetch(`/groups/invites/token/${token}`),
+  acceptInvite: (inviteId) => apiFetch(`/groups/invites/${inviteId}/accept`, { method: 'POST' }),
+  declineInvite: (inviteId) => apiFetch(`/groups/invites/${inviteId}/decline`, { method: 'POST' }),
+  listMessages: (id) => apiFetch(`/groups/${id}/messages`),
+  postMessage: (id, body) => apiFetch(`/groups/${id}/messages`, { method: 'POST', body: { body } }),
+  shareItinerary: (id, payload) => apiFetch(`/groups/${id}/itinerary-share`, { method: 'POST', body: payload }),
+
+  listNotifications: () => apiFetch('/notifications'),
+  markNotificationRead: (id) => apiFetch(`/notifications/${id}/read`, { method: 'PATCH' }),
+  markAllNotificationsRead: () => apiFetch('/notifications/read-all', { method: 'POST' }),
+
+  listBookings: () => apiFetch('/bookings'),
+  createBooking: (payload) => apiFetch('/bookings', { method: 'POST', body: payload }),
+  updateBooking: (id, payload) => apiFetch(`/bookings/${id}`, { method: 'PATCH', body: payload }),
+  deleteBooking: (id) => apiFetch(`/bookings/${id}`, { method: 'DELETE' }),
+
+  listAttractions: (destination, { limit } = {}) => apiFetch(`/attractions?destination=${encodeURIComponent(destination)}${limit ? `&limit=${limit}` : ''}`),
+  searchHotels: (destination, { limit } = {}) => apiFetch(`/hotels/search?destination=${encodeURIComponent(destination)}${limit ? `&limit=${limit}` : ''}`),
+  searchFlights: (destination, { origin = 'Delhi', departureDate, returnDate, limit } = {}) => apiFetch(`/flights/search?destination=${encodeURIComponent(destination)}&origin=${encodeURIComponent(origin)}&departureDate=${encodeURIComponent(departureDate)}${returnDate ? `&returnDate=${encodeURIComponent(returnDate)}` : ''}${limit ? `&limit=${limit}` : ''}`),
+  searchTrains: (destination, { origin = 'Delhi', date, limit } = {}) => apiFetch(`/trains/search?destination=${encodeURIComponent(destination)}&origin=${encodeURIComponent(origin)}${date ? `&date=${encodeURIComponent(date)}` : ''}${limit ? `&limit=${limit}` : ''}`),
+  getTrainStatus: (number, { date } = {}) => apiFetch(`/trains/${encodeURIComponent(number)}/status${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  getCurrentWeather: (destination) => apiFetch(`/weather/current?destination=${encodeURIComponent(destination)}`),
+  getWeatherForecast: (destination) => apiFetch(`/weather/forecast?destination=${encodeURIComponent(destination)}`),
+  searchDestinations: (q) => apiFetch(`/destinations/search?q=${encodeURIComponent(q)}`),
+
+  listServiceReviews: (serviceId) => apiFetch(`/services/${serviceId}/reviews`),
+  createServiceReview: (serviceId, payload) => apiFetch(`/services/${serviceId}/reviews`, { method: 'POST', body: payload }),
+
+  postLocation: (tripId, payload) => apiFetch(`/trips/${tripId}/location`, { method: 'POST', body: payload }),
+  getLocationState: (tripId) => apiFetch(`/trips/${tripId}/location`),
+  previewShareToken: (token) => apiFetch(`/trips/share/${token}`),
+  raiseEmergency: (tripId, payload) => apiFetch(`/trips/${tripId}/emergency`, { method: 'POST', body: payload }),
+  getEmergencyState: (tripId) => apiFetch(`/trips/${tripId}/emergency`),
+  resolveEmergency: (tripId, alertId) => apiFetch(`/trips/${tripId}/emergency/${alertId}/resolve`, { method: 'POST' }),
+  myFeedback: () => apiFetch('/feedback/mine'),
+  submitSupportTicket: (payload) => apiFetch('/support', { method: 'POST', body: payload }),
+  mySupportTickets: () => apiFetch('/support/mine'),
+
+  adminStats: () => apiFetch('/admin/stats'),
+  adminUsers: () => apiFetch('/admin/users'),
+  adminGroups: () => apiFetch('/admin/groups'),
+  adminTrips: () => apiFetch('/admin/trips'),
+  adminBookings: () => apiFetch('/admin/bookings'),
+  adminFeedback: () => apiFetch('/admin/feedback'),
+  adminSupport: () => apiFetch('/admin/support'),
+  adminUpdateSupportTicket: (id, status) => apiFetch(`/admin/support/${id}`, { method: 'PATCH', body: { status } }),
+  adminEmergencies: () => apiFetch('/admin/emergencies'),
+  adminAgentRuns: () => apiFetch('/admin/agent-runs'),
+}
+
+export { API_URL, TOKEN_KEY }
+
+===== context/BookingContext.jsx =====
+import { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { api } from '../services/api'
+import { useAuth } from './AuthContext'
+
+const BookingContext = createContext(null)
+
+export function BookingProvider({ children }) {
+  const { isAuthenticated } = useAuth()
+  const [bookingList, setBookingList] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  const refresh = useCallback(async () => {
+    if (!isAuthenticated) { setBookingList([]); return }
+    setLoading(true)
+    try {
+      const { bookings } = await api.listBookings()
+      setBookingList(bookings)
+    } catch {
+      // leave existing list as-is — a transient failure shouldn't wipe the UI
+    } finally {
+      setLoading(false)
+    }
+  }, [isAuthenticated])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  const addBooking = async (item, type) => {
+    const booking = await api.createBooking({
+      serviceId: item.id,
+      type,
+      name: `${item.provider} — ${item.route}`,
+      provider: item.provider,
+      route: item.route,
+      dateLabel: item.time,
+      price: item.price,
+    })
+    setBookingList((list) => [booking.booking, ...list])
+    return booking.booking
+  }
+
+  const updateStatus = async (id, status) => {
+    const { booking } = await api.updateBooking(id, { status })
+    setBookingList((list) => list.map((b) => (b.id === id ? booking : b)))
+    return booking
+  }
+
+  const cancelBooking = (id) => updateStatus(id, 'cancelled')
+
+  const removeBooking = async (id) => {
+    await api.deleteBooking(id)
+    setBookingList((list) => list.filter((b) => b.id !== id))
+  }
+
+  return (
+    <BookingContext.Provider value={{ bookingList, loading, addBooking, updateStatus, cancelBooking, removeBooking, refresh }}>
+      {children}
+    </BookingContext.Provider>
+  )
+}
+
+export const useBookings = () => useContext(BookingContext)
+
+===== context/AuthContext.jsx =====
+import { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { api, getToken, setToken } from '../services/api'
+
+const AuthContext = createContext(null)
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadSession() {
+      if (!getToken()) {
+        setLoading(false)
+        return
+      }
+      try {
+        const { user } = await api.me()
+        if (!cancelled) setUser(user)
+      } catch {
+        setToken(null)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadSession()
+    return () => { cancelled = true }
+  }, [])
+
+  const login = useCallback(async (email, password) => {
+    const { user, token } = await api.login({ email, password })
+    setToken(token)
+    setUser(user)
+    return user
+  }, [])
+
+  const register = useCallback(async (username, email, password) => {
+    const { user, token } = await api.register({ username, email, password })
+    setToken(token)
+    setUser(user)
+    return user
+  }, [])
+
+  const logout = useCallback(async () => {
+    try { await api.logout() } catch { /* token may already be invalid, still clear locally */ }
+    setToken(null)
+    setUser(null)
+  }, [])
+
+  const refreshUser = useCallback((patch) => setUser((u) => (u ? { ...u, ...patch } : u)), [])
+
+  return (
+    <AuthContext.Provider value={{ user, loading, isAuthenticated: Boolean(user), login, register, logout, refreshUser }}>
+      {children}
+    </AuthContext.Provider>
+  )
+}
+
+export const useAuth = () => useContext(AuthContext)
+
+===== context/ExpenseContext.jsx =====
+import { createContext, useContext, useEffect, useState } from 'react'
+import { expenses as initialExpenses } from '../data/mockData'
+
+const ExpenseContext = createContext(null)
+const TOTAL_BUDGET = 35000
+
+function load() {
+  const saved = localStorage.getItem('voyagr_expenses')
+  return saved ? JSON.parse(saved) : initialExpenses
+}
+
+export function ExpenseProvider({ children }) {
+  const [expenseList, setExpenseList] = useState(load)
+
+  useEffect(() => {
+    localStorage.setItem('voyagr_expenses', JSON.stringify(expenseList))
+  }, [expenseList])
+
+  const addExpense = (expense) => {
+    setExpenseList((list) => [
+      { id: `e_${Date.now()}`, date: 'Today', ...expense },
+      ...list,
+    ])
+  }
+
+  const totalSpent = expenseList.reduce((s, e) => s + Number(e.amount), 0)
+
+  return (
+    <ExpenseContext.Provider value={{ expenseList, addExpense, totalSpent, totalBudget: TOTAL_BUDGET }}>
+      {children}
+    </ExpenseContext.Provider>
+  )
+}
+
+export const useExpenses = () => useContext(ExpenseContext)
+
+===== hooks/useAgentStream.js =====
+import { useCallback, useRef, useState } from 'react'
+import { API_URL, getToken } from '../services/api'
+
+// We use fetch + a manual SSE-line parser rather than the native EventSource,
+// because EventSource can't send an Authorization header or a POST body,
+// and the plan request needs both.
+export function useAgentStream() {
+  const [trace, setTrace] = useState([])
+  const [status, setStatus] = useState('idle') // idle | streaming | done | error | cancelled
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+  const abortRef = useRef(null)
+
+  const cancel = useCallback(() => {
+    abortRef.current?.abort()
+    setStatus('cancelled')
+  }, [])
+
+  const start = useCallback(async (tripRequest) => {
+    setTrace([])
+    setResult(null)
+    setError(null)
+    setStatus('streaming')
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const res = await fetch(`${API_URL}/ai/plan/stream`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+        },
+        body: JSON.stringify(tripRequest),
+        signal: controller.signal,
+      })
+
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => null)
+        throw new Error(data?.error?.message || `Planning request failed (${res.status})`)
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const frames = buffer.split('\n\n')
+        buffer = frames.pop() // last chunk may be incomplete, keep it for next read
+
+        for (const frame of frames) {
+          const line = frame.split('\n').find((l) => l.startsWith('data: '))
+          if (!line) continue
+          const payload = JSON.parse(line.slice(6))
+
+          if (payload.type === 'trace') {
+            setTrace((t) => [...t, payload.entry])
+          } else if (payload.type === 'done') {
+            setResult(payload)
+            setStatus('done')
+          } else if (payload.type === 'error') {
+            setError(payload.message)
+            setStatus('error')
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      setError(err.message)
+      setStatus('error')
+    }
+  }, [])
+
+  return { start, cancel, trace, status, result, error }
+}
+
+===== pages/BookingManager.jsx =====
+import { Plane, Train, Bus, Hotel, Car, FileText, X, Eye, Star, CheckCircle2 } from 'lucide-react'
+import { useState } from 'react'
+import { useBookings } from '../context/BookingContext'
+import { api } from '../services/api'
+
+const iconFor = { Flight: Plane, Train, Bus, Hotel, Rental: Car }
+const statusStyle = { pending: 'badge-warn', confirmed: 'badge-success', completed: 'badge-success', cancelled: 'badge-danger', reviewed: 'badge-success', selected: 'badge-warn' }
+const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+
+const NEXT_STATUS = { pending: 'confirmed', confirmed: 'completed' }
+const NEXT_LABEL = { pending: 'Mark Confirmed', confirmed: 'Mark Completed' }
+
+function ReviewModal({ booking, onClose, onSubmitted }) {
+  const [rating, setRating] = useState(5)
+  const [title, setTitle] = useState('')
+  const [body, setBody] = useState('')
+  const [error, setError] = useState(null)
+  const [sending, setSending] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setSending(true)
+    setError(null)
+    try {
+      await api.createServiceReview(booking.serviceId, { bookingId: booking.id, rating, title, body })
+      onSubmitted()
+    } catch (err) {
+      setError(err.message)
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="atlas-modal-backdrop" onClick={onClose}>
+      <div className="atlas-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <p className="atlas-eyebrow">Rate & review</p>
+        <h4>{booking.name}</h4>
+        <form onSubmit={submit} className="atlas-field-grid" style={{ gridTemplateColumns: '1fr', marginTop: 14 }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button type="button" key={n} onClick={() => setRating(n)} aria-label={`${n} stars`} style={{ border: 0, background: 'transparent' }}>
+                <Star size={22} fill={n <= rating ? '#f59e0b' : 'none'} color={n <= rating ? '#f59e0b' : 'var(--border)'} />
+              </button>
+            ))}
+          </div>
+          <div className="atlas-field"><label>Title (optional)</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Sum it up in a few words" /></div>
+          <div className="atlas-field"><label>Review (optional)</label><input value={body} onChange={(e) => setBody(e.target.value)} placeholder="What stood out?" /></div>
+          {error && <p className="atlas-error-text">{error}</p>}
+          <button type="submit" className="btn-primary atlas-plan-submit" disabled={sending}>{sending ? 'Submitting…' : 'Submit review'}</button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+export default function BookingManager() {
+  const { bookingList, updateStatus, cancelBooking, refresh } = useBookings()
+  const [viewing, setViewing] = useState(null)
+  const [reviewing, setReviewing] = useState(null)
+  const [error, setError] = useState(null)
+
+  const advance = async (b) => {
+    try { await updateStatus(b.id, NEXT_STATUS[b.status]) } catch (err) { setError(err.message) }
+  }
+  const cancel = async (b) => {
+    try { await cancelBooking(b.id) } catch (err) { setError(err.message) }
+  }
+
+  return (
+    <div>
+      <section><p className="atlas-eyebrow">Your trips</p><h1 className="atlas-page-title">Everything in one place.</h1><p className="atlas-page-copy">Your saved transport, stays and reservations — ready when you are.</p></section>
+      {error && <p className="atlas-error-text">{error}</p>}
+      <div className="atlas-list-surface">
+        {bookingList.length === 0 && <div className="p-10 text-center text-sm atlas-muted">No bookings yet — select something in Reservations.</div>}
+        {bookingList.map((b) => {
+          const Icon = iconFor[b.type] || FileText
+          return (
+            <div key={b.id} className="atlas-list-row">
+              <span className="atlas-list-icon"><Icon size={17} /></span>
+              <div className="atlas-list-main"><b>{b.name}</b><small>{b.type} · {b.dateLabel || '—'}</small></div>
+              <span className={statusStyle[b.status] || 'badge-warn'}>{capitalize(b.status)}</span>
+              <span className="atlas-price">₹{b.price.toLocaleString()}</span>
+              <button onClick={() => setViewing(b)} className="atlas-action" aria-label="View booking"><Eye size={16} /></button>
+              {NEXT_STATUS[b.status] && <button onClick={() => advance(b)} className="atlas-action" aria-label={NEXT_LABEL[b.status]} title={NEXT_LABEL[b.status]}><CheckCircle2 size={16} /></button>}
+              {b.status === 'completed' && <button onClick={() => setReviewing(b)} className="atlas-action" aria-label="Rate and review" title="Rate & review"><Star size={16} /></button>}
+              {(b.status === 'pending' || b.status === 'confirmed') && <button onClick={() => cancel(b)} className="atlas-action" aria-label="Cancel booking" title="Cancel"><X size={16} /></button>}
+            </div>
+          )
+        })}
+      </div>
+
+      {viewing && (
+        <div className="atlas-modal-backdrop" onClick={() => setViewing(null)}>
+          <div className="atlas-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <p className="atlas-eyebrow">Booking details</p>
+            <h3 className="mt-2 text-lg font-bold">{viewing.name}</h3>
+            <div className="mt-5 grid gap-3 text-sm atlas-muted">
+              <div>Type <strong className="float-right text-[var(--text)]">{viewing.type}</strong></div>
+              <div>Date <strong className="float-right text-[var(--text)]">{viewing.dateLabel || '—'}</strong></div>
+              <div>Price <strong className="float-right text-[var(--text)]">₹{viewing.price.toLocaleString()}</strong></div>
+              <div>Status <strong className="float-right text-[var(--text)]">{capitalize(viewing.status)}</strong></div>
+            </div>
+            <button className="btn-primary mt-6 w-full" onClick={() => setViewing(null)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {reviewing && (
+        <ReviewModal
+          booking={reviewing}
+          onClose={() => setReviewing(null)}
+          onSubmitted={() => { setReviewing(null); refresh() }}
+        />
+      )}
+    </div>
+  )
+}
+
+===== pages/Expenses.jsx =====
+import { useState } from 'react'
+import { PlusCircle } from 'lucide-react'
+import { useExpenses } from '../context/ExpenseContext'
+import { TextField, SelectField } from '../components/FormField'
+
+const categories = ['Transport', 'Hotel', 'Food', 'Activities', 'Other']
+
+export default function Expenses() {
+  const { expenseList, addExpense, totalSpent, totalBudget } = useExpenses()
+  const [form, setForm] = useState({ label: '', amount: '', category: 'Food' })
+  const remaining = totalBudget - totalSpent
+  const handleAdd = (e) => { e.preventDefault(); if (!form.label || !form.amount) return; addExpense({ ...form, amount: Number(form.amount) }); setForm({ label: '', amount: '', category: 'Food' }) }
+
+  return (
+    <div>
+      <section><p className="atlas-eyebrow">Trip money</p><h1 className="atlas-page-title">Keep your budget on track.</h1><p className="atlas-page-copy">Track spending without turning your trip into a spreadsheet.</p></section>
+      <div className="atlas-stat-strip" style={{marginTop:28}}><div className="atlas-stat"><small>Total spent</small><strong>₹{totalSpent.toLocaleString()}</strong></div><div className="atlas-stat"><small>Trip budget</small><strong>₹{totalBudget.toLocaleString()}</strong><div className="atlas-progress"><span style={{width:`${Math.min((totalSpent/totalBudget)*100,100)}%`}} /></div></div><div className="atlas-stat"><small>Remaining</small><strong className={remaining < 0 ? 'text-danger' : 'text-success'}>₹{remaining.toLocaleString()}</strong></div></div>
+      <div className="atlas-two-col">
+        <div><div className="atlas-section-label">Recent expenses</div><div className="atlas-expense-list">{expenseList.map((e) => <div className="atlas-expense-row" key={e.id}><div><b>{e.label}</b><small>{e.category} · {e.date}</small></div><strong>₹{e.amount.toLocaleString()}</strong></div>)}</div></div>
+        <form onSubmit={handleAdd} className="atlas-form-panel"><h3>Add an expense</h3><TextField label="Description" value={form.label} onChange={(v) => setForm((f) => ({...f,label:v}))} placeholder="Cafe lunch" /><TextField label="Amount (₹)" value={form.amount} onChange={(v) => setForm((f) => ({...f,amount:v}))} placeholder="500" /><SelectField label="Category" value={form.category} onChange={(v) => setForm((f) => ({...f,category:v}))} options={categories} /><button type="submit" className="btn-primary mt-2 w-full"><PlusCircle size={15} /> Add expense</button></form>
+      </div>
+    </div>
+  )
+}
+
+===== pages/GroupHub.jsx =====
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Send, Plus, UserPlus, Link2, Check, X, Sparkles } from 'lucide-react'
+import { useExpenses } from '../context/ExpenseContext'
+import { useAuth } from '../context/AuthContext'
+import { api } from '../services/api'
+
+const ROLE_BADGE = { owner: 'badge-danger', admin: 'badge-warn', member: 'badge-success' }
+
+export default function GroupHub() {
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  const { expenseList } = useExpenses()
+
+  const [groups, setGroups] = useState([])
+  const [activeGroupId, setActiveGroupId] = useState(null)
+  const [groupDetail, setGroupDetail] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [text, setText] = useState('')
+  const [invites, setInvites] = useState([])
+  const [showCreate, setShowCreate] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [inviteUsername, setInviteUsername] = useState('')
+  const [inviteLink, setInviteLink] = useState(null)
+  const [error, setError] = useState(null)
+  const pollRef = useRef(null)
+
+  const loadGroups = async () => {
+    const { groups } = await api.listGroups()
+    setGroups(groups)
+    if (groups.length && !activeGroupId) setActiveGroupId(groups[0].id)
+  }
+
+  const loadInvites = async () => {
+    try { const { invites } = await api.myInvites(); setInvites(invites) } catch { /* non-blocking */ }
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect -- initial data load, not a synchronous setState
+  useEffect(() => { loadGroups(); loadInvites() }, [])
+
+  useEffect(() => {
+    if (!activeGroupId) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const [{ group }, { messages }] = await Promise.all([api.getGroup(activeGroupId), api.listMessages(activeGroupId)])
+        if (!cancelled) { setGroupDetail(group); setMessages(messages) }
+      } catch { /* group may have been deleted/left */ }
+    }
+    load()
+    pollRef.current = setInterval(load, 4000) // simple polling — no websocket layer yet
+    return () => { cancelled = true; clearInterval(pollRef.current) }
+  }, [activeGroupId])
+
+  const createGroup = async (e) => {
+    e.preventDefault()
+    if (!newGroupName.trim()) return
+    try {
+      const { group } = await api.createGroup({ name: newGroupName.trim() })
+      setNewGroupName(''); setShowCreate(false)
+      await loadGroups()
+      setActiveGroupId(group.id)
+    } catch (err) { setError(err.message) }
+  }
+
+  const sendMessage = async (e) => {
+    e.preventDefault()
+    if (!text.trim() || !activeGroupId) return
+    const body = text.trim()
+    setText('')
+    try {
+      await api.postMessage(activeGroupId, body)
+      const { messages } = await api.listMessages(activeGroupId)
+      setMessages(messages)
+    } catch (err) { setError(err.message) }
+  }
+
+  const invite = async (e) => {
+    e.preventDefault()
+    if (!inviteUsername.trim()) return
+    try {
+      await api.inviteToGroup(activeGroupId, { username: inviteUsername.trim() })
+      setInviteUsername('')
+      const { group } = await api.getGroup(activeGroupId)
+      setGroupDetail(group)
+    } catch (err) { setError(err.message) }
+  }
+
+  const generateLink = async () => {
+    try {
+      const { invite } = await api.inviteToGroup(activeGroupId, { expiresInDays: 7, singleUse: false })
+      setInviteLink(`${window.location.origin}/join/group/${invite.token}`)
+    } catch (err) { setError(err.message) }
+  }
+
+  const removeMember = async (userId) => {
+    try {
+      await api.removeGroupMember(activeGroupId, userId)
+      const { group } = await api.getGroup(activeGroupId)
+      setGroupDetail(group)
+    } catch (err) { setError(err.message) }
+  }
+
+  const acceptInvite = async (inviteId) => {
+    await api.acceptInvite(inviteId)
+    await Promise.all([loadGroups(), loadInvites()])
+  }
+  const declineInvite = async (inviteId) => {
+    await api.declineInvite(inviteId)
+    await loadInvites()
+  }
+
+  const sharedTotal = expenseList.reduce((s, e) => s + Number(e.amount), 0)
+  const memberCount = groupDetail?.members?.length || 1
+  const perPerson = Math.round(sharedTotal / memberCount)
+  const canManage = groupDetail?.myRole === 'owner' || groupDetail?.myRole === 'admin'
+
+  return (
+    <div>
+      <section>
+        <p className="atlas-eyebrow">Travel together</p>
+        <h1 className="atlas-page-title">Plan it together.</h1>
+        <p className="atlas-page-copy">Decide, chat and share itineraries without leaving your trip workspace.</p>
+      </section>
+
+      {invites.length > 0 && invites.map((inv) => (
+        <div className="atlas-invite-banner" key={inv.id}>
+          <div><b>Invitation to "{inv.group?.name}"</b><small>You've been invited to join this group</small></div>
+          <div className="atlas-invite-actions">
+            <button className="accept" onClick={() => acceptInvite(inv.id)}><Check size={11} style={{ display: 'inline', marginRight: 3 }} />Accept</button>
+            <button className="decline" onClick={() => declineInvite(inv.id)}><X size={11} style={{ display: 'inline', marginRight: 3 }} />Decline</button>
+          </div>
+        </div>
+      ))}
+
+      {error && <p className="atlas-error-text">{error}</p>}
+
+      <div className="atlas-group-surface">
+        <aside className="atlas-group-side">
+          <span className="atlas-section-label">Your groups</span>
+          <div className="atlas-group-list">
+            {groups.map((g) => (
+              <button key={g.id} className={`atlas-group-list-item ${g.id === activeGroupId ? 'is-active' : ''}`} onClick={() => setActiveGroupId(g.id)}>
+                {g.name}<small>{g.memberCount} member{g.memberCount === 1 ? '' : 's'}</small>
+              </button>
+            ))}
+          </div>
+
+          {!showCreate ? (
+            <button className="atlas-add-stop-btn" style={{ marginTop: 12, width: '100%', justifyContent: 'center' }} onClick={() => setShowCreate(true)}><Plus size={13} /> New group</button>
+          ) : (
+            <form onSubmit={createGroup} style={{ marginTop: 12, display: 'flex', gap: 6 }}>
+              <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="Group name" style={{ flex: 1, minWidth: 0, border: '1px solid var(--border)', borderRadius: 10, padding: '8px 10px', fontSize: 11, background: 'var(--surface)', color: 'var(--text)' }} autoFocus />
+              <button type="submit" className="btn-primary" style={{ padding: '8px 12px' }}>Add</button>
+            </form>
+          )}
+
+          {groupDetail && (
+            <>
+              <div className="atlas-members" style={{ marginTop: 20 }}>
+                {groupDetail.members.map((m) => (
+                  <div className="atlas-member atlas-member-row" key={m.id}>
+                    <span className="atlas-member-avatar">{m.username.slice(0, 2).toUpperCase()}</span>
+                    <div className="atlas-member-info"><b>{m.username}</b><small className={ROLE_BADGE[m.role]} style={{ display: 'inline-block', marginTop: 3 }}>{m.role}</small></div>
+                    {canManage && m.id !== user.id && m.role !== 'owner' && (
+                      <button onClick={() => removeMember(m.id)} aria-label={`Remove ${m.username}`}><X size={13} /></button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="atlas-group-stat">
+                <small>Shared spending</small>
+                <strong>₹{sharedTotal.toLocaleString()}</strong>
+                <small style={{ display: 'block', marginTop: 10 }}>Split {memberCount} ways · ₹{perPerson.toLocaleString()} / person</small>
+              </div>
+
+              {canManage && (
+                <div className="atlas-manage-group">
+                  <span className="atlas-section-label"><UserPlus size={11} style={{ display: 'inline', marginRight: 4 }} />Invite</span>
+                  <form onSubmit={invite}>
+                    <input value={inviteUsername} onChange={(e) => setInviteUsername(e.target.value)} placeholder="Username" />
+                  </form>
+                  <button className="link-btn" onClick={generateLink}><Link2 size={11} style={{ display: 'inline', marginRight: 4 }} />Generate invite link</button>
+                  {inviteLink && (
+                    <input readOnly value={inviteLink} onFocus={(e) => e.target.select()} style={{ marginTop: 8 }} />
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </aside>
+
+        <section className="atlas-chat">
+          {groupDetail ? (
+            <>
+              <header className="atlas-chat-head">
+                <b>{groupDetail.name}</b>
+                <small>{groupDetail.description || `${groupDetail.members.length} members`}</small>
+              </header>
+              <div className="atlas-chat-messages">
+                {messages.map((m) => (
+                  <div key={m.id} className={`atlas-message ${m.senderId === user.id ? 'mine' : ''}`}>
+                    {m.senderId !== user.id && <b>{m.senderUsername}</b>}
+                    {m.kind === 'itinerary_share' ? (
+                      <div className="atlas-share-card">
+                        <b><Sparkles size={11} style={{ display: 'inline', marginRight: 4 }} />AtlasAI Itinerary</b>
+                        <div>{m.meta?.destination}</div>
+                        <div className="meta">{m.meta?.days} days{m.meta?.estimatedCost ? ` · ₹${m.meta.estimatedCost.toLocaleString()} est.` : ''}</div>
+                        {m.body && <p style={{ marginTop: 6 }}>{m.body}</p>}
+                        <button onClick={() => navigate('/itinerary', { state: { tripId: m.meta?.tripId } })}>View itinerary</button>
+                      </div>
+                    ) : (
+                      <p>{m.body}</p>
+                    )}
+                    <small>{new Date(m.createdAt.replace(' ', 'T') + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                  </div>
+                ))}
+                {messages.length === 0 && <p style={{ fontSize: 11, color: 'var(--muted)' }}>No messages yet — say hi!</p>}
+              </div>
+              <form className="atlas-chat-form" onSubmit={sendMessage}>
+                <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Message the group..." />
+                <button type="submit" aria-label="Send message"><Send size={16} /></button>
+              </form>
+            </>
+          ) : (
+            <div style={{ display: 'grid', placeItems: 'center', height: '100%', color: 'var(--muted)', fontSize: 12 }}>
+              {groups.length === 0 ? 'Create a group to start planning together.' : 'Select a group'}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+===== pages/Profile.jsx =====
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Mail, MapPin, Settings, LogOut, MessageSquareText, LifeBuoy, Check, ShieldCheck } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import { TextField, SelectField } from '../components/FormField'
+import { api } from '../services/api'
+
+export default function Profile() {
+  const { user, logout, refreshUser } = useAuth()
+  const navigate = useNavigate()
+  const [editing, setEditing] = useState(false)
+  const [form, setForm] = useState({
+    homeLocation: user?.homeLocation || '',
+    comfortPref: user?.comfortPref || 'Standard',
+    travelModePref: user?.travelModePref || 'Train',
+    interests: user?.interests || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  if (!user) return null
+
+  const save = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      const { user: updated } = await api.updateProfile(form)
+      refreshUser(updated)
+      setEditing(false)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <section>
+        <p className="atlas-eyebrow">Account</p>
+        <h1 className="atlas-page-title">Your travel identity.</h1>
+        <p className="atlas-page-copy">The preferences AtlasAI uses to shape recommendations.</p>
+      </section>
+
+      <div className="atlas-profile-surface">
+        <div className="atlas-profile-top">
+          <div className="atlas-profile-big">{user.username[0].toUpperCase()}</div>
+          <div>
+            <h2 className="text-xl font-bold tracking-tight">{user.username}</h2>
+            <p className="mt-1 flex items-center gap-1.5 text-xs atlas-muted"><Mail size={12} /> {user.email}</p>
+            <p className="mt-1 text-xs atlas-muted">@{user.username} · {user.role === 'admin' ? 'Admin' : 'Traveler'}</p>
+          </div>
+        </div>
+
+        <div className="mt-6 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-[var(--accent)]"><Settings size={15} /><span className="text-xs font-bold">Travel preferences</span></div>
+          {!editing && <button onClick={() => setEditing(true)} className="text-xs font-bold text-[var(--accent)]">Edit</button>}
+        </div>
+
+        {!editing ? (
+          <div className="atlas-preferences">
+            <div className="atlas-preference"><small>Comfort</small><strong>{user.comfortPref || 'Standard'}</strong></div>
+            <div className="atlas-preference"><small>Preferred mode</small><strong>{user.travelModePref || 'Not set'}</strong></div>
+            <div className="atlas-preference"><small>Interests</small><strong>{user.interests || 'Not set'}</strong></div>
+          </div>
+        ) : (
+          <form onSubmit={save} className="atlas-field-grid three" style={{ marginTop: 14 }}>
+            <SelectField label="Comfort" value={form.comfortPref} onChange={(v) => setForm((f) => ({ ...f, comfortPref: v }))} options={['Budget', 'Standard', 'Premium']} />
+            <SelectField label="Travel mode" value={form.travelModePref} onChange={(v) => setForm((f) => ({ ...f, travelModePref: v }))} options={['Flight', 'Train', 'Bus']} />
+            <TextField label="Interests" value={form.interests} onChange={(v) => setForm((f) => ({ ...f, interests: v }))} placeholder="Nature, Food, Adventure" />
+            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8 }}>
+              <button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+              <button type="button" onClick={() => setEditing(false)} className="atlas-ghost-button">Cancel</button>
+            </div>
+          </form>
+        )}
+
+        {saved && <p style={{ marginTop: 10, fontSize: 11, color: 'var(--color-success)', display: 'flex', alignItems: 'center', gap: 5 }}><Check size={12} /> Preferences saved</p>}
+
+        <div className="mt-7 border-t border-[var(--border)] pt-6">
+          <div className="flex items-center gap-2 text-xs font-semibold"><MapPin size={15} className="text-[var(--accent)]" /> Saved home location</div>
+          {!editing ? (
+            <p className="mt-2 text-xs atlas-muted">{user.homeLocation || 'Not set'}</p>
+          ) : (
+            <div style={{ marginTop: 8, maxWidth: 240 }}>
+              <TextField label="" value={form.homeLocation} onChange={(v) => setForm((f) => ({ ...f, homeLocation: v }))} placeholder="e.g. New Delhi" />
+            </div>
+          )}
+        </div>
+
+        <div className="mt-7 border-t border-[var(--border)] pt-6" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={() => navigate('/feedback')} className="atlas-ghost-button"><MessageSquareText size={14} /> Send feedback</button>
+          <button onClick={() => navigate('/support')} className="atlas-ghost-button"><LifeBuoy size={14} /> Contact support</button>
+          {user.role === 'admin' && <button onClick={() => navigate('/admin')} className="atlas-ghost-button"><ShieldCheck size={14} /> Admin dashboard</button>}
+        </div>
+
+        <button onClick={async () => { await logout(); navigate('/') }} className="mt-5 inline-flex items-center gap-2 border-0 bg-transparent text-xs font-semibold text-red-500"><LogOut size={14} /> Log out</button>
+      </div>
+    </div>
+  )
+}
+
+===== pages/Login.jsx =====
+import { useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { Sparkles, ArrowRight, AlertTriangle } from 'lucide-react'
+import { TextField } from '../components/FormField'
+import { useAuth } from '../context/AuthContext'
+
+export default function Login() {
+  const { login, register } = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const redirectTo = location.state?.from || '/'
+
+  const [mode, setMode] = useState('login') // 'login' | 'register'
+  const [form, setForm] = useState({ username: '', email: '', password: '' })
+  const [error, setError] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError(null)
+    setSubmitting(true)
+    try {
+      if (mode === 'login') await login(form.email, form.password)
+      else await register(form.username, form.email, form.password)
+      navigate(redirectTo, { replace: true })
+    } catch (err) {
+      setError(err.message || 'Something went wrong')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-md py-14">
+      <div className="atlas-form-surface">
+        <div className="atlas-form-heading">
+          <span className="step-icon"><Sparkles size={17} /></span>
+          <div><strong>{mode === 'login' ? 'Welcome back' : 'Create your account'}</strong><small>{mode === 'login' ? 'Sign in to plan and manage your trips.' : 'Join AtlasAI to start planning.'}</small></div>
+        </div>
+
+        {error && (
+          <div className="atlas-error-text">
+            <AlertTriangle size={14} /> {error}
+          </div>
+        )}
+
+        <form onSubmit={submit} className="atlas-field-grid" style={{ gridTemplateColumns: '1fr', gap: 14 }}>
+          {mode === 'register' && (
+            <TextField label="Username" value={form.username} onChange={(v) => setForm((f) => ({ ...f, username: v }))} />
+          )}
+          <TextField label="Email" type="email" value={form.email} onChange={(v) => setForm((f) => ({ ...f, email: v }))} />
+          <TextField label="Password" type="password" value={form.password} onChange={(v) => setForm((f) => ({ ...f, password: v }))} />
+
+          <button type="submit" className="btn-primary atlas-plan-submit" disabled={submitting}>
+            {submitting ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'} <ArrowRight size={15} />
+          </button>
+        </form>
+
+        <button
+          onClick={() => setMode((m) => (m === 'login' ? 'register' : 'login'))}
+          style={{ marginTop: 16, border: 0, background: 'transparent', color: 'var(--subtle)', fontSize: 11, cursor: 'pointer' }}
+        >
+          {mode === 'login' ? "Don't have an account? Create one" : 'Already have an account? Sign in'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+===== pages/JoinGroup.jsx =====
+import { useEffect, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { Users, Sparkles, AlertTriangle } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import { api } from '../services/api'
+
+export default function JoinGroup() {
+  const { token } = useParams()
+  const navigate = useNavigate()
+  const { isAuthenticated, loading: authLoading } = useAuth()
+  const [preview, setPreview] = useState(null)
+  const [error, setError] = useState(null)
+  const [joining, setJoining] = useState(false)
+
+  useEffect(() => {
+    if (authLoading) return
+    if (!isAuthenticated) { navigate('/login', { state: { from: `/join/group/${token}` } }); return }
+    api.previewInvite(token)
+      .then(({ preview }) => setPreview(preview))
+      .catch((err) => setError(err.message))
+  }, [token, isAuthenticated, authLoading, navigate])
+
+  const join = async () => {
+    setJoining(true)
+    try {
+      const { group } = await api.acceptInvite(preview.inviteId)
+      navigate('/group', { state: { groupId: group.id } })
+    } catch (err) {
+      setError(err.message)
+      setJoining(false)
+    }
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <AlertTriangle className="mx-auto text-[var(--color-danger)]" />
+        <h2 className="mt-4 text-lg font-bold">Can't open this invite</h2>
+        <p className="mt-2 text-sm atlas-muted">{error}</p>
+        <button className="btn-primary mt-5" onClick={() => navigate('/group')}>Go to Group Hub</button>
+      </div>
+    )
+  }
+
+  if (!preview) {
+    return <div className="mx-auto max-w-md py-16 text-center"><Sparkles className="mx-auto text-accent animate-spin" /></div>
+  }
+
+  return (
+    <div className="mx-auto max-w-md py-16">
+      <div className="atlas-form-surface" style={{ textAlign: 'center' }}>
+        <div className="step-icon" style={{ margin: '0 auto' }}><Users size={18} /></div>
+        <p className="atlas-eyebrow" style={{ marginTop: 14 }}>Group invite</p>
+        <h2 style={{ fontSize: 22, marginTop: 4 }}>Join "{preview.groupName}"?</h2>
+        {preview.groupDescription && <p className="atlas-page-copy" style={{ marginTop: 8 }}>{preview.groupDescription}</p>}
+        <p style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>Invited by <b>{preview.invitedBy}</b> · {preview.memberCount} member{preview.memberCount === 1 ? '' : 's'}</p>
+
+        {preview.alreadyMember ? (
+          <>
+            <p style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>You're already a member of this group.</p>
+            <button className="btn-primary mt-5" onClick={() => navigate('/group')}>Go to Group Hub</button>
+          </>
+        ) : (
+          <button className="btn-primary atlas-plan-submit" style={{ marginTop: 20 }} onClick={join} disabled={joining}>
+            {joining ? 'Joining…' : 'Join Group'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+===== pages/Feedback.jsx =====
+import { useEffect, useState } from 'react'
+import { MessageSquareText, Send } from 'lucide-react'
+import { TextField, SelectField } from '../components/FormField'
+import { api } from '../services/api'
+
+const CATEGORIES = ['General', 'Bug', 'Feature request', 'AI planning', 'Bookings', 'Other']
+
+export default function Feedback() {
+  const [category, setCategory] = useState('General')
+  const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState(null)
+  const [history, setHistory] = useState([])
+
+  const load = () => api.myFeedback().then(({ feedback }) => setHistory(feedback)).catch(() => {})
+  useEffect(() => { load() }, [])
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!message.trim()) return
+    setSending(true)
+    setError(null)
+    try {
+      await api.submitFeedback({ category, message })
+      setMessage('')
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div>
+      <section>
+        <p className="atlas-eyebrow">We're listening</p>
+        <h1 className="atlas-page-title">Share your feedback.</h1>
+        <p className="atlas-page-copy">Bugs, ideas, or anything that felt off — it goes straight to the team.</p>
+      </section>
+
+      <div className="atlas-form-surface">
+        <div className="atlas-form-heading">
+          <span className="step-icon"><MessageSquareText size={17} /></span>
+          <div><strong>New feedback</strong><small>A sentence or two is plenty.</small></div>
+        </div>
+        <form onSubmit={submit} className="atlas-field-grid" style={{ gridTemplateColumns: '1fr', marginTop: 14 }}>
+          <SelectField label="Category" value={category} onChange={setCategory} options={CATEGORIES} />
+          <TextField label="Message" value={message} onChange={setMessage} placeholder="What's on your mind?" />
+          {error && <p className="atlas-error-text">{error}</p>}
+          <button type="submit" className="btn-primary atlas-plan-submit" disabled={sending}>{sending ? 'Sending…' : <><Send size={14} /> Submit feedback</>}</button>
+        </form>
+      </div>
+
+      {history.length > 0 && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {history.map((f) => (
+            <div key={f.id} className="atlas-list-row">
+              <div className="atlas-list-main"><b>{f.category || 'General'}</b><small>{f.message}</small></div>
+              <small style={{ color: 'var(--subtle)' }}>{new Date(f.createdAt.replace(' ', 'T') + 'Z').toLocaleDateString()}</small>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+===== pages/Support.jsx =====
+import { useEffect, useState } from 'react'
+import { LifeBuoy, Send } from 'lucide-react'
+import { TextField } from '../components/FormField'
+import { api } from '../services/api'
+
+const STATUS_STYLE = { open: 'badge-warn', in_progress: 'badge-warn', resolved: 'badge-success' }
+const STATUS_LABEL = { open: 'Open', in_progress: 'In progress', resolved: 'Resolved' }
+
+export default function Support() {
+  const [subject, setSubject] = useState('')
+  const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState(null)
+  const [tickets, setTickets] = useState([])
+
+  const load = () => api.mySupportTickets().then(({ tickets }) => setTickets(tickets)).catch(() => {})
+  useEffect(() => { load() }, [])
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!subject.trim() || !message.trim()) return
+    setSending(true)
+    setError(null)
+    try {
+      await api.submitSupportTicket({ subject, message })
+      setSubject(''); setMessage('')
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div>
+      <section>
+        <p className="atlas-eyebrow">Need a hand?</p>
+        <h1 className="atlas-page-title">Contact support.</h1>
+        <p className="atlas-page-copy">Trouble with a booking, your account, or the app — tell us what's going on.</p>
+      </section>
+
+      <div className="atlas-form-surface">
+        <div className="atlas-form-heading">
+          <span className="step-icon"><LifeBuoy size={17} /></span>
+          <div><strong>New support ticket</strong><small>We'll get back to you as soon as we can.</small></div>
+        </div>
+        <form onSubmit={submit} className="atlas-field-grid" style={{ gridTemplateColumns: '1fr', marginTop: 14 }}>
+          <TextField label="Subject" value={subject} onChange={setSubject} placeholder="e.g. Refund for a cancelled booking" />
+          <TextField label="Message" value={message} onChange={setMessage} placeholder="Describe the issue" />
+          {error && <p className="atlas-error-text">{error}</p>}
+          <button type="submit" className="btn-primary atlas-plan-submit" disabled={sending}>{sending ? 'Sending…' : <><Send size={14} /> Submit ticket</>}</button>
+        </form>
+      </div>
+
+      {tickets.length > 0 && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {tickets.map((t) => (
+            <div key={t.id} className="atlas-list-row">
+              <div className="atlas-list-main"><b>{t.subject}</b><small>{t.message}</small></div>
+              <span className={STATUS_STYLE[t.status]}>{STATUS_LABEL[t.status]}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+===== pages/ShareTrip.jsx =====
+import { useEffect, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { MapPin, Clock3, ShieldAlert, Sparkles, AlertTriangle } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import { api } from '../services/api'
+
+export default function ShareTrip() {
+  const { token } = useParams()
+  const navigate = useNavigate()
+  const { isAuthenticated, loading: authLoading } = useAuth()
+  const [preview, setPreview] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (authLoading) return
+    if (!isAuthenticated) { navigate('/login', { state: { from: `/share/trip/${token}` } }); return }
+    api.previewShareToken(token)
+      .then(({ preview }) => setPreview(preview))
+      .catch((err) => setError(err.message))
+  }, [token, isAuthenticated, authLoading, navigate])
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <AlertTriangle className="mx-auto text-[var(--color-danger)]" />
+        <h2 className="mt-4 text-lg font-bold">Can't open this link</h2>
+        <p className="mt-2 text-sm atlas-muted">{error}</p>
+      </div>
+    )
+  }
+
+  if (!preview) {
+    return <div className="mx-auto max-w-md py-16 text-center"><Sparkles className="mx-auto text-accent animate-spin" /></div>
+  }
+
+  return (
+    <div className="mx-auto max-w-md py-14">
+      {preview.emergencyActive && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: '#fff', background: 'var(--color-danger)', borderRadius: 14, padding: '12px 16px', marginBottom: 16, fontSize: 12, fontWeight: 700 }}>
+          <ShieldAlert size={16} /> This trip has an active emergency alert
+        </div>
+      )}
+      <div className="atlas-form-surface">
+        <p className="atlas-eyebrow"><MapPin size={13} style={{ display: 'inline', marginRight: 5 }} />Live trip location</p>
+        <h2 style={{ fontSize: 22, marginTop: 4 }}>{preview.destination}</h2>
+        <p style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>{preview.tripTitle}</p>
+
+        <div style={{ marginTop: 20, display: 'grid', gap: 10, fontSize: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Last known location</span><b>{preview.lastLocation.latitude.toFixed(4)}, {preview.lastLocation.longitude.toFixed(4)}</b></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span><Clock3 size={11} style={{ display: 'inline', marginRight: 4 }} />Last updated</span><b>{new Date(preview.lastUpdatedAt.replace(' ', 'T') + 'Z').toLocaleString()}</b></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Trip progress</span><b>{preview.progress}%</b></div>
+        </div>
+
+        <p style={{ marginTop: 20, fontSize: 10, color: 'var(--subtle)' }}>This link was shared by a trip member and can be revoked or expire at any time.</p>
+      </div>
+    </div>
+  )
+}
+
+===== pages/Admin.jsx =====
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Users, Layers, Map, Ticket, MessageSquareText, LifeBuoy, ShieldAlert, Cpu, Compass } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import { api } from '../services/api'
+
+const TABS = [
+  { key: 'overview', label: 'Overview', icon: Compass },
+  { key: 'users', label: 'Users', icon: Users },
+  { key: 'groups', label: 'Groups', icon: Layers },
+  { key: 'trips', label: 'Trips', icon: Map },
+  { key: 'bookings', label: 'Bookings', icon: Ticket },
+  { key: 'feedback', label: 'Feedback', icon: MessageSquareText },
+  { key: 'support', label: 'Support', icon: LifeBuoy },
+  { key: 'emergencies', label: 'Emergencies', icon: ShieldAlert },
+  { key: 'agentRuns', label: 'Agent Runs', icon: Cpu },
+]
+
+const TICKET_STATUSES = ['open', 'in_progress', 'resolved']
+const fmt = (n) => (n == null ? '—' : n.toLocaleString())
+const when = (s) => (s ? new Date(s.replace(' ', 'T') + 'Z').toLocaleString() : '—')
+
+function StatsTab({ stats }) {
+  if (!stats) return null
+  const cards = [
+    { label: 'Total users', value: fmt(stats.totalUsers) },
+    { label: 'Active trips', value: fmt(stats.activeTrips), sub: `${fmt(stats.totalTrips)} total` },
+    { label: 'Groups', value: fmt(stats.totalGroups) },
+    { label: 'Bookings', value: fmt(stats.totalBookings) },
+    { label: 'Avg. service rating', value: stats.averageServiceRating ?? '—', sub: `${fmt(stats.totalReviews)} reviews` },
+    { label: 'Support tickets', value: fmt(stats.supportTicketCount) },
+    { label: 'Emergency alerts', value: fmt(stats.emergencyAlertCount), sub: `${fmt(stats.activeEmergencyCount)} active now` },
+  ]
+  return (
+    <>
+      <div className="atlas-overview-grid">
+        {cards.map((c) => (
+          <div className="atlas-overview-card" key={c.label}>
+            <span>{c.label}</span>
+            <strong>{c.value}</strong>
+            {c.sub && <small>{c.sub}</small>}
+          </div>
+        ))}
+      </div>
+      <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+        <div className="atlas-list-row" style={{ borderBottom: '1px solid var(--border)' }}><b style={{ fontSize: 11 }}>Popular destinations</b></div>
+        {stats.popularDestinations.map((d) => (
+          <div className="atlas-list-row" key={d.destination}><div className="atlas-list-main"><b>{d.destination}</b></div><span className="badge-success">{d.count} trip{d.count === 1 ? '' : 's'}</span></div>
+        ))}
+        {stats.popularDestinations.length === 0 && <div className="atlas-list-row"><small style={{ color: 'var(--muted)' }}>No trips yet</small></div>}
+      </div>
+    </>
+  )
+}
+
+export default function Admin() {
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  const [active, setActive] = useState('overview')
+  const [stats, setStats] = useState(null)
+  const [rows, setRows] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (user && user.role !== 'admin') navigate('/')
+  }, [user, navigate])
+
+  useEffect(() => {
+    let cancelled = false
+    setRows(null)
+    setError(null)
+    const loaders = {
+      overview: () => api.adminStats().then((d) => setStats(d.stats)),
+      users: () => api.adminUsers().then((d) => setRows(d.users)),
+      groups: () => api.adminGroups().then((d) => setRows(d.groups)),
+      trips: () => api.adminTrips().then((d) => setRows(d.trips)),
+      bookings: () => api.adminBookings().then((d) => setRows(d.bookings)),
+      feedback: () => api.adminFeedback().then((d) => setRows(d.feedback)),
+      support: () => api.adminSupport().then((d) => setRows(d.tickets)),
+      emergencies: () => api.adminEmergencies().then((d) => setRows(d.emergencies)),
+      agentRuns: () => api.adminAgentRuns().then((d) => setRows(d.runs)),
+    }
+    loaders[active]().catch((err) => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [active])
+
+  const resolveTicket = async (id, status) => {
+    try {
+      await api.adminUpdateSupportTicket(id, status)
+      const { tickets } = await api.adminSupport()
+      setRows(tickets)
+    } catch (err) { setError(err.message) }
+  }
+
+  if (!user || user.role !== 'admin') return null
+
+  return (
+    <div>
+      <section>
+        <p className="atlas-eyebrow">Admin</p>
+        <h1 className="atlas-page-title">Platform overview.</h1>
+        <p className="atlas-page-copy">Real data straight from the database — nothing here is a mock.</p>
+      </section>
+
+      <div className="atlas-tabbar" style={{ flexWrap: 'wrap', width: 'auto' }}>
+        {TABS.map((t) => (
+          <button key={t.key} className={`atlas-tab ${active === t.key ? 'is-active' : ''}`} onClick={() => setActive(t.key)}>
+            <t.icon size={12} style={{ display: 'inline', marginRight: 5 }} />{t.label}
+          </button>
+        ))}
+      </div>
+
+      {error && <p className="atlas-error-text">{error}</p>}
+
+      {active !== 'overview' && rows === null && !error && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          <div className="atlas-list-row"><small className="atlas-muted">Loading…</small></div>
+        </div>
+      )}
+
+      {active === 'overview' && <div style={{ marginTop: 20 }}>{!stats && !error ? <p className="atlas-muted" style={{ fontSize: 12 }}>Loading…</p> : <StatsTab stats={stats} />}</div>}
+
+      {active === 'users' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((u) => (
+            <div className="atlas-list-row" key={u.id}>
+              <div className="atlas-list-main"><b>{u.username}</b><small>{u.email}</small></div>
+              <span className={u.role === 'admin' ? 'badge-danger' : 'badge-success'}>{u.role}</span>
+              <small style={{ color: 'var(--subtle)' }}>{when(u.createdAt)}</small>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No users yet</small></div>}
+        </div>
+      )}
+
+      {active === 'groups' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((g) => (
+            <div className="atlas-list-row" key={g.id}>
+              <div className="atlas-list-main"><b>{g.name}</b><small>{g.description || 'No description'}</small></div>
+              <span className="badge-success">{g.memberCount} member{g.memberCount === 1 ? '' : 's'}</span>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No groups yet</small></div>}
+        </div>
+      )}
+
+      {active === 'trips' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((t) => (
+            <div className="atlas-list-row" key={t.id}>
+              <div className="atlas-list-main"><b>{t.destination}</b><small>{t.title}</small></div>
+              <span className="badge-success">{t.status}</span>
+              <small style={{ color: 'var(--subtle)' }}>{when(t.createdAt)}</small>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No trips yet</small></div>}
+        </div>
+      )}
+
+      {active === 'bookings' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((b) => (
+            <div className="atlas-list-row" key={b.id}>
+              <div className="atlas-list-main"><b>{b.name}</b><small>{b.username} · {b.type}</small></div>
+              <span className="badge-success">{b.status}</span>
+              <span className="atlas-price">₹{b.price.toLocaleString()}</span>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No bookings yet</small></div>}
+        </div>
+      )}
+
+      {active === 'feedback' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((f) => (
+            <div className="atlas-list-row" key={f.id}>
+              <div className="atlas-list-main"><b>{f.category || 'General'}</b><small>{f.message}</small></div>
+              <small style={{ color: 'var(--subtle)' }}>{when(f.createdAt)}</small>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No feedback yet</small></div>}
+        </div>
+      )}
+
+      {active === 'support' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((t) => (
+            <div className="atlas-list-row" key={t.id}>
+              <div className="atlas-list-main"><b>{t.subject}</b><small>{t.message}</small></div>
+              <select value={t.status} onChange={(e) => resolveTicket(t.id, e.target.value)} style={{ border: '1px solid var(--border)', borderRadius: 9, padding: '6px 8px', fontSize: 10, background: 'var(--surface)', color: 'var(--text)' }}>
+                {TICKET_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No support tickets yet</small></div>}
+        </div>
+      )}
+
+      {active === 'emergencies' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((e) => (
+            <div className="atlas-list-row" key={e.id}>
+              <div className="atlas-list-main"><b>{e.notes || 'No details provided'}</b><small>Trip {e.tripId}</small></div>
+              <span className={e.status === 'active' ? 'badge-danger' : 'badge-success'}>{e.status}</span>
+              <small style={{ color: 'var(--subtle)' }}>{when(e.createdAt)}</small>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No emergency alerts</small></div>}
+        </div>
+      )}
+
+      {active === 'agentRuns' && rows && (
+        <div className="atlas-list-surface" style={{ marginTop: 20 }}>
+          {rows.map((r) => (
+            <div className="atlas-list-row" key={r.id}>
+              <div className="atlas-list-main"><b>{r.request?.destination || 'Unknown destination'}</b><small>{r.trace?.length || 0} trace events</small></div>
+              <span className={r.status === 'completed' ? 'badge-success' : r.status === 'failed' ? 'badge-danger' : 'badge-warn'}>{r.status}</span>
+              <small style={{ color: 'var(--subtle)' }}>{when(r.startedAt)}</small>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="atlas-list-row"><small>No agent runs yet</small></div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
