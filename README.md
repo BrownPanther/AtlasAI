@@ -10,10 +10,11 @@
 [![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/Demo-Live%20on%20Vercel-success?style=for-the-badge&logo=vercel&logoColor=white)](https://atlas-ai-travel-planner.vercel.app/)
 
 **An intelligent, multi-agent travel orchestration engine and interactive itinerary studio crafted in Liquid Glass aesthetic.**
 
-[Live Demo](#-production-deployment-guide) • [Architecture](#-architecture) • [Quickstart](#-local-development-setup) • [Deploy for Free](#-production-deployment-guide)
+[🚀 **Live Application**](https://atlas-ai-travel-planner.vercel.app/) • [Architecture](#-architecture) • [Quickstart](#-local-development-setup) • [Deploy for Free](#-production-deployment-guide)
 
 </div>
 
