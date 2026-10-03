@@ -22,7 +22,7 @@
 
 ## 🌟 Overview
 
-**AtlasAI** is a full-stack, autonomous travel operating system that replaces static travel itineraries with real-time, multi-agent AI collaboration. When a user requests a journey, 5 specialized autonomous agents evaluate logistics, microclimates, transport routes, accommodations, and budget constraints in parallel, streaming their structured reasoning live to the user via Server-Sent Events (SSE).
+**AtlasAI** is a full-stack, autonomous travel operating system that replaces static travel itineraries with real-time, multi-agent AI collaboration. When a user requests a journey, a 9-agent pipeline handles intent parsing, transport, accommodations, activities, safety, budgeting, critique, replanning, and final synthesis — streaming structured reasoning live to the user via Server-Sent Events (SSE).
 
 Built with a custom **Liquid Glass** design system, AtlasAI features a dual-theme interface offering a futuristic deep dark glassmorphism and a warm retro cream light theme.
 
@@ -144,21 +144,28 @@ AtlasAI features a custom **Liquid Glass** aesthetic with dual-theme immersion: 
 AtlasAI/
 ├── backend/
 │   ├── src/
-│   │   ├── agents/          # Multi-agent orchestrator & individual agent logic
+│   │   ├── agents/          # 9-agent pipeline: Intent, Transport, Stay, Activity, Safety, Budget, Critic, Replanning, Synthesis
+│   │   ├── cache/           # In-memory and TTL caching utilities
 │   │   ├── config/          # Environment configuration & security checks
+│   │   ├── data/            # Static seed/fallback data for providers
 │   │   ├── db/              # SQLite schema, migrations & seed data
+│   │   ├── llm/             # LLM client & prompt utilities
 │   │   ├── middleware/      # Auth, rate limiting & error handling
 │   │   ├── normalizers/     # Unified canonical format for all providers
 │   │   ├── providers/       # OpenTripMap, OpenWeather, RailRadar, etc.
+│   │   ├── repositories/    # Data access layer over SQLite
 │   │   ├── routes/          # Express REST API & SSE streaming endpoints
 │   │   ├── services/        # Business logic & SQLite TTL caching
-│   │   └── tools/           # Agent execution tools (weather, routes, hotels)
-│   ├── test/                # Automated node:test suite (220+ tests)
+│   │   ├── tools/           # Agent execution tools (weather, routes, hotels)
+│   │   └── utils/           # Shared utility helpers
+│   ├── test/                # Automated node:test suite (235+ tests)
 │   └── package.json         # Node.js 20/22 runtime configuration
 │
 ├── travel-planner/          # React 19 Frontend
 │   ├── components/          # Liquid Glass UI components & drawers
 │   ├── context/             # Auth, Booking, Expense, and Notification contexts
+│   ├── data/                # Static frontend data & constants
+│   ├── hooks/               # Custom React hooks
 │   ├── pages/               # Itinerary, PlanTrip, Dashboard, GroupHub, etc.
 │   ├── public/              # SVGs, icons, and high-res destination assets
 │   ├── services/            # Client-side API abstraction & SSE hooks
