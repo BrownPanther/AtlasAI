@@ -28,38 +28,51 @@ Built with a custom **Liquid Glass** design system, AtlasAI features a dual-them
 
 ---
 
-## 🤖 Multi-Agent Orchestration Swarm
+## 🤖 Multi-Agent Orchestration Pipeline
 
-AtlasAI delegates trip planning to a team of specialized AI agents running concurrently:
+AtlasAI routes every trip request through a **9-agent staged pipeline**. Agents run sequentially or in parallel depending on their data dependencies, with an automatic critique-and-replan loop to ensure quality.
 
 ```mermaid
 flowchart TD
     User([User Request / Trip Parameters]) --> Orchestrator[Multi-Agent Orchestrator]
 
-    subgraph Autonomous Swarm
-        Orchestrator --> Agent1[Discovery Agent<br/>Attractions & Culture]
-        Orchestrator --> Agent2[Transport Agent<br/>Trains, Flights & Transit]
-        Orchestrator --> Agent3[Accommodation Agent<br/>Hotels & Neighborhoods]
-        Orchestrator --> Agent4[Route & Schedule Agent<br/>Topological Sequencing]
-        Orchestrator --> Agent5[Budget & Safety Agent<br/>Expenditure & Microclimate]
+    Orchestrator --> Intent[Intent Agent<br/>Parse & Validate Request]
+
+    Intent --> Parallel
+
+    subgraph Parallel["Parallel Specialist Agents"]
+        Transport[Transport Agent<br/>Trains, Flights & Transit]
+        Stay[Stay Agent<br/>Hotels & Accommodations]
+        Activity[Activity Agent<br/>Attractions & Experiences]
     end
 
-    Agent1 --> ProviderHub[Real Data Provider Registry & SQLite TTL Cache]
-    Agent2 --> ProviderHub
-    Agent3 --> ProviderHub
-    Agent4 --> ProviderHub
-    Agent5 --> ProviderHub
+    Parallel --> Safety[Safety Agent<br/>Weather & Risk Assessment]
+    Safety --> Budget[Budget Agent<br/>Cost Allocation & Constraints]
+    Budget --> Critic[Critic Agent<br/>Quality Review & Approval]
 
-    ProviderHub --> Synthesis[Synthesis Engine]
+    Critic -->|Approved| Synthesis[Synthesis Agent<br/>Final Itinerary Assembly]
+    Critic -->|Needs Revision| Replanning[Replanning Agent<br/>Targeted Re-runs]
+    Replanning -->|Re-run flagged agents| Parallel
+    Replanning --> Budget
+
+    Transport --> ProviderHub[Real Data Provider Registry & SQLite TTL Cache]
+    Stay --> ProviderHub
+    Activity --> ProviderHub
+    Safety --> ProviderHub
+
     Synthesis --> Stream[SSE Real-Time Stream]
     Stream --> Client[Interactive Itinerary Studio]
 ```
 
-1. **Discovery Agent**: Identifies top sights, local experiences, and hidden gems using coordinate-first OpenTripMap geocoding.
-2. **Transport Agent**: Reconciles train corridors (RailRadar) and transit routes with schedule feasibility.
-3. **Accommodation Agent**: Recommends hotels clustered near key destinations to reduce daily commute times.
-4. **Route & Schedule Agent**: Sequences stops using OpenRouteService topological routing, avoiding zigzag travel.
-5. **Budget & Safety Agent**: Allocates daily costs (stay, food, activities, transit) against user ceilings and monitors live OpenWeather microclimates.
+1. **Intent Agent**: Parses and validates the raw trip request — extracting destination, dates, travellers, budget, pace, dietary, and accessibility requirements before any other agent runs.
+2. **Transport Agent**: Reconciles train corridors (RailRadar) and transit routes with schedule feasibility. Runs in parallel with Stay and Activity.
+3. **Stay Agent**: Recommends hotels clustered near key destinations to minimize daily commute time. Runs in parallel with Transport and Activity.
+4. **Activity Agent**: Identifies top sights, local experiences, and hidden gems using coordinate-first OpenTripMap geocoding. Runs in parallel with Transport and Stay.
+5. **Safety Agent**: Evaluates live OpenWeather microclimates and risk factors using the transport routes and schedule selected by the parallel trio.
+6. **Budget Agent**: Allocates daily costs (stay, meals, transit, activities) against user-defined ceilings, running after all data agents to have complete cost inputs.
+7. **Critic Agent**: Reviews the assembled plan for quality, consistency, and constraint satisfaction. If issues are found, it triggers the Replanning Agent.
+8. **Replanning Agent**: Identifies which specific agents need to re-run and with what corrections, enabling targeted fixes without restarting the whole pipeline.
+9. **Synthesis Agent**: Assembles the final, approved itinerary and streams it to the client via SSE once the Critic is satisfied.
 
 ---
 
@@ -164,7 +177,7 @@ AtlasAI/
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/<your-username>/AtlasAI.git
+git clone https://github.com/BrownPanther/AtlasAI.git
 cd AtlasAI
 ```
 
